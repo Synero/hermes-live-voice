@@ -652,7 +652,10 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     try { audioCtx.close() } catch {}
     bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, muted: false })
   }
-  return { close: () => { try { ctl.close && ctl.close() } catch {} } }
+  return {
+    close: () => { try { ctl.close && ctl.close() } catch {} },
+    toggleMute: () => { try { return ctl.toggleMute() } catch {} return false }
+  }
 }
 
 function useLiveState() {
