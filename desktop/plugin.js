@@ -459,7 +459,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
   const audioCtx = new AudioContext()
   if (audioCtx.state === 'suspended') { try { await audioCtx.resume() } catch {} }
   const analyserMic = audioCtx.createAnalyser(); analyserMic.fftSize = 512
-  // grafo completo con mute-gain: garantiza frames del analyser aunque el destination no consuma
+  // grafo de medición: mantiene el analyser alimentado independientemente del destination
   const micMute = audioCtx.createGain(); micMute.gain.value = 0
   audioCtx.createMediaStreamSource(stream).connect(analyserMic)
   analyserMic.connect(micMute); micMute.connect(audioCtx.destination)
@@ -659,7 +659,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
 }
 
 function useLiveState() {
-  const [s, setS] = useState(() => ({ live: bus.live, stage: bus.stage, micLevel: bus.micLevel, remoteLevel: bus.remoteLevel, widget: bus.widget, err: bus.err, transcriptRev: bus.transcriptRev, spkUser: bus.spkUser, spkBot: bus.spkBot }))
+  const [s, setS] = useState(() => ({ live: bus.live, stage: bus.stage, micLevel: bus.micLevel, remoteLevel: bus.remoteLevel, widget: bus.widget, err: bus.err, transcriptRev: bus.transcriptRev, spkUser: bus.spkUser, spkBot: bus.spkBot, muted: bus.muted }))
   useEffect(() => {
     const h = e => setS({ ...e.detail })
     window.addEventListener('talk-desktop:state', h)
@@ -677,6 +677,7 @@ function LiveBars({ size = 13, count = 5 }) {
     const draw = () => {
       const now = performance.now()
       const live = bus.live && bus.stage === 'connected'
+      const muted = bus.muted === true
       const botActive = (bus.remoteLevel || 0) > (bus.micLevel || 0)
       const spec = botActive ? bus.remBands : bus.bands
       const level = Math.max(bus.micLevel || 0, bus.remoteLevel || 0)
@@ -690,6 +691,9 @@ function LiveBars({ size = 13, count = 5 }) {
         let target
         if (!live) {
           target = 0.24 + 0.14 * Math.sin(now / 700 + i * 1.15)
+        } else if (muted && !botActive) {
+          // mic muteado: respiración calmada; si el bot habla, se ven sus ondas normales
+          target = 0.20 + 0.08 * Math.sin(now / 900 + i * 1.1)
         } else if (specAlive && spec) {
           target = Math.max(0.10, Math.pow(Math.min(1, (spec[i] || 0) * 1.9), 0.72) * w)
         } else {
@@ -705,7 +709,7 @@ function LiveBars({ size = 13, count = 5 }) {
         const h = Math.max(2, Math.round(lvl[i] * size))
         el.style.height = h + 'px'
         el.style.opacity = live ? String(0.72 + Math.min(0.28, lvl[i] * 0.5)) : '0.5'
-        el.style.background = !live ? '#a1a1aa' : (botActive ? '#a78bfa' : '#60a5fa')
+        el.style.background = !live ? '#a1a1aa' : (botActive ? '#a78bfa' : (muted ? '#9ca3af' : '#60a5fa'))
         el.style.boxShadow = 'none'
       }
     }
@@ -1475,9 +1479,7 @@ function ComposerLiveButton({ ctx }) {
         children: [
           connecting && jsx(SpinnerRing, {}),
           (live && !connecting)
-            ? (micHover
-              ? jsx(HangupIcon, { size: 15 })
-              : (s.muted ? jsx(MicOffIcon, { size: 15, color: '#f59e0b' }) : jsx(LiveBars, { size: 10, count: 5 })))
+            ? (micHover ? jsx(HangupIcon, { size: 15 }) : jsx(LiveBars, { size: 10, count: 5 }))
             : jsx(MicIcon, { size: 15 })
         ]
       }),
