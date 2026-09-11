@@ -1436,7 +1436,7 @@ function ComposerLiveButton({ ctx }) {
     } finally { setBusy(false) }
   }
 
-  const live = s.live
+  const live = s.live && s.stage === 'connected'
   useEffect(() => { if (!s.live && showTr) setShowTr(false) }, [s.live, showTr])
   const connecting = busy || (s.live && s.stage !== 'connected' && s.stage !== 'error' && s.stage !== 'failed')
   const cs = 'var(--composer-control-size, 30px)'
@@ -1472,7 +1472,9 @@ function ComposerLiveButton({ ctx }) {
         children: [
           connecting && jsx(SpinnerRing, {}),
           (live && !connecting)
-            ? (micHover ? jsx(HangupIcon, { size: 15 }) : jsx(LiveBars, { size: 10, count: 5 }))
+            ? (micHover
+              ? jsx(HangupIcon, { size: 15 })
+              : (s.muted ? jsx(MicOffIcon, { size: 15, color: '#f59e0b' }) : jsx(LiveBars, { size: 10, count: 5 })))
             : jsx(MicIcon, { size: 15 })
         ]
       }),
@@ -1484,14 +1486,18 @@ function ComposerLiveButton({ ctx }) {
         onMouseEnter: () => setMuteHover(true),
         onMouseLeave: () => setMuteHover(false),
         style: {
-          width: 22, height: 22, borderRadius: '50%', padding: 0, border: 'none', cursor: 'pointer',
+          width: 24, height: 24, borderRadius: '50%', padding: 0, border: 'none', cursor: 'pointer',
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          background: s.muted ? 'rgba(245,158,11,0.16)' : (muteHover ? 'var(--chrome-action-hover, rgba(0,0,0,0.08))' : 'transparent'),
+          background: s.muted ? 'rgba(245,158,11,0.22)' : (muteHover ? 'var(--chrome-action-hover, rgba(0,0,0,0.09))' : 'transparent'),
           color: s.muted ? '#f59e0b' : (muteHover ? 'var(--foreground, #18181b)' : 'var(--ui-text-tertiary, #71717a)'),
-          opacity: (s.muted || muteHover) ? 1 : 0.85,
-          transition: 'background 140ms, color 140ms'
+          boxShadow: s.muted
+            ? '0 0 0 1.5px rgba(245,158,11,0.55)'
+            : (muteHover ? '0 0 0 1px var(--border, rgba(0,0,0,0.14))' : 'none'),
+          opacity: (s.muted || muteHover) ? 1 : 0.8,
+          transform: muteHover ? 'scale(1.1)' : 'scale(1)',
+          transition: 'background 140ms, color 140ms, box-shadow 140ms, transform 140ms'
         },
-        children: s.muted ? jsx(MicOffIcon, { size: 13 }) : jsx(MicIcon, { size: 13 })
+        children: s.muted ? jsx(MicOffIcon, { size: 14 }) : jsx(MicIcon, { size: 14 })
       }),
       live && jsx('span', {
         'data-context-menu-skip': 'true',
