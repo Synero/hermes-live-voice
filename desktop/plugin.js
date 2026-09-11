@@ -47,12 +47,12 @@ const VOICE_CAP_MIN = plan => {
 const SB = 'var(--popover-surface, #ffffff)'
 
 const bus = {
-  live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, err: '',
+  live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, err: '', muted: false,
   bands: [0, 0, 0, 0, 0, 0], remBands: [0, 0, 0, 0, 0, 0], transcriptRev: 0, spkUser: false, spkBot: false, botName: '',
   emit() {
     try {
       window.dispatchEvent(new CustomEvent('talk-desktop:state', { detail: {
-        live: this.live, stage: this.stage, micLevel: this.micLevel, remoteLevel: this.remoteLevel,
+        live: this.live, stage: this.stage, micLevel: this.micLevel, remoteLevel: this.remoteLevel, muted: this.muted,
         widget: this.widget, err: this.err, bands: this.bands, remBands: this.remBands,
         transcriptRev: this.transcriptRev, spkUser: this.spkUser, spkBot: this.spkBot
       } }))
@@ -66,6 +66,8 @@ const bus = {
 let transcript = []
 let liveAudioMs = 0
 let handoffMode = 'client'
+let _delegBusy = false
+let _delegQueue = null
 let _lastAppendedId = ''
 let _bumpTimer = null
 function _bumpTranscript() {
@@ -146,6 +148,10 @@ let _delegating = null
 
 // Voz → Chat: envía la petición al chat ENFOCADO (el agente real responde ahí,
 // streaming visible en la ventana) y devuelve el texto de la respuesta para leerlo.
+const _voiceNote = () => (EN
+  ? '[voice] Reply briefly and naturally so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors, use the latest intent. Do not claim something is done before it actually is.\n\n'
+  : '[voz] Responde breve y natural para LEER EN VOZ ALTA (2-4 frases, sin markdown ni listas). El texto es dictado y puede tener errores; usa la última intención. No afirmes que algo quedó hecho antes de hacerlo.\n\n')
+
 async function delegateToChat(text) {
   const req = String(text || '').trim()
   if (!req) return 'Petición vacía.'
@@ -182,7 +188,7 @@ async function delegateToChat(text) {
           errText = 'Error del agente: ' + String((ev && (ev.message || ev.error || (ev.payload || {}).message)) || 'desconocido')
         }))
       }
-      await host.request('prompt.submit', { session_id: sid, text: req })
+      await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
     } catch (e) {
       return 'No se pudo enviar al chat: ' + String((e && e.message) || e || 'error')
     }
@@ -225,6 +231,35 @@ async function runVoiceTool(ctx, callId, name, args, dc) {
 // Delegación nativa del lane v3: el modelo de voz delega una tarea al cliente.
 // Con "Trabajar en el chat" la ejecutamos en la ventana enfocada y devolvemos el
 // resultado por delegation.context.append (el modelo lo lee en voz alta).
+function _isJunkDelegation(t) {
+  const s = String(t || '').trim()
+  if (!s) return true
+  if (s.length > 90) return false
+  const toks = s.toLowerCase().replace(/[¿?¡!.,;:…()"'«»]/g, ' ').split(/\s+/).filter(Boolean)
+  if (!toks.length) return true
+  const fill = new Set(['hola', 'hello', 'hey', 'dale', 'ya', 'bueno', 'bien', 'si', 'sí', 'no', 'nope', 'aló', 'alo', 'holi', 'eh', 'emm', 'mmm', 'ah', 'ahá', 'ajá', 'aja', 'ok', 'okay', 'listo', 'perfecto', 'gracias', 'thanks', 'eso', 'mismo', 'y', 'qué', 'que', 'pasó', 'paso', 'final', 'me', 'escuchas', 'estás', 'estas', 'ahí', 'ahi', 'verá', 'vera', 'oye', 'pues', 'onda', 'po'])
+  const n = toks.filter(w => fill.has(w)).length
+  return n / toks.length >= 0.8
+}
+
+function _plainForVoice(t) {
+  let s = String(t || '')
+  s = s.replace(/```[\s\S]*?```/g, ' ' + tr('(bloque de código omitido)', '(code block omitted)') + ' ')
+  s = s.replace(/`([^`]*)`/g, '$1')
+  s = s.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1')
+  s = s.replace(/^#{1,6}\s+/gm, '')
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+  s = s.replace(/\n{3,}/g, '\n\n')
+  return s.trim()
+}
+
+function _delegRespond(dc, itemId, text) {
+  try {
+    dc.send(JSON.stringify({ type: 'delegation.context.append', delegation_item_id: itemId,
+      content: [{ type: 'input_text', text: String(text || '').slice(0, 3500) }] }))
+  } catch {}
+}
+
 function handleDelegation(ctx, msg, dc) {
   const item = (msg && msg.item) || {}
   const itemId = String(item.id || '')
@@ -243,26 +278,48 @@ function handleDelegation(ctx, msg, dc) {
     pushTranscript('sys', tr('El agente del servidor la está resolviendo; te leeré el resultado cuando esté.', 'The server agent is on it; I will read the result when ready.'))
     return
   }
+  if (_isJunkDelegation(req)) {
+    pushTranscript('tool', tr('charla (no es tarea) — la voz responde sola', 'small talk (not a task) — voice answers itself'))
+    _delegRespond(dc, itemId, tr('El usuario solo estaba conversando, no pidiendo trabajo. Responde tú breve y natural; si te estaba preguntando por algo en curso, dile que sigues en eso. No hay nada que ejecutar.', 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.'))
+    return
+  }
   const chatWork = (ctx.storage.get(KEY_CHAT) || '1') !== '0'
   if (!chatWork) {
     pushTranscript('sys', tr('Tareas desactivadas: activa "Trabajar en el chat".', 'Tasks are off: enable "Work in the chat".'))
-    try {
-      dc.send(JSON.stringify({ type: 'delegation.context.append', delegation_item_id: itemId,
-        content: [{ type: 'input_text', text: tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.') }] }))
-    } catch {}
+    _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
     return
   }
+  if (_delegBusy) {
+    _delegQueue = { req, itemId, at: Date.now() }
+    pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
+    _delegRespond(dc, itemId, tr('Ya hay una tarea en curso. Dile al usuario que sigues trabajando en eso; si lo que dijo es una corrección, se verá reflejada en el resultado, y si es algo nuevo, espera a que termine lo actual.', 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.'))
+    return
+  }
+  _runDelegation(ctx, dc, itemId, req)
+}
+
+function _runDelegation(ctx, dc, itemId, req) {
+  _delegBusy = true
   ;(async () => {
     let out = ''
     try { out = await delegateToChat(req) } catch (e) { out = '' }
     out = String(out || '').trim()
     if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
-    pushTranscript('tool', tr('resultado: ', 'result: ') + out.slice(0, 160))
-    try {
-      dc.send(JSON.stringify({ type: 'delegation.context.append', delegation_item_id: itemId,
-        content: [{ type: 'input_text', text: tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): ', 'Task result (answer the user with this, briefly and naturally): ') + out.slice(0, 3500) }] }))
-    } catch {}
-  })().catch(() => {})
+    const forVoice = _plainForVoice(out)
+    pushTranscript('tool', tr('resultado: ', 'result: ') + forVoice.slice(0, 160))
+    _delegRespond(dc, itemId, tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): ', 'Task result (answer the user with this, briefly and naturally): ') + forVoice)
+  })().catch(() => {}).then(() => {
+    _delegBusy = false
+    const q = _delegQueue
+    _delegQueue = null
+    if (q && Date.now() - q.at < 600000) {
+      pushTranscript('tool', tr('retomando en cola: ', 'resuming queued: ') + q.req.slice(0, 100))
+      _runDelegation(ctx, dc, q.itemId, q.req)
+    } else if (q) {
+      pushTranscript('sys', tr('La tarea en cola quedó obsoleta y no se ejecutó.', 'Queued task went stale and was not run.'))
+      _delegRespond(dc, q.itemId, tr('La tarea en cola quedó obsoleta y no se ejecutó. Dile al usuario que si todavía la quiere, la repita y la ejecutas al tiro.', 'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.'))
+    }
+  })
 }
 
 function handleRealtimeEvent(msg, dc, ctx) {
@@ -452,6 +509,17 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     if (changed) _bumpTranscript()
   }, 1000)
   const ctl = { close: null }
+  // Mute del micrófono: alterna enabled en los tracks de audio del PC (robusto a fallback de device).
+  let mutedNow = false
+  ctl.toggleMute = () => {
+    mutedNow = !mutedNow
+    try {
+      pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio') s.track.enabled = !mutedNow })
+    } catch {}
+    bus.set({ muted: mutedNow })
+    pushTranscript('sys', mutedNow ? tr('Micrófono silenciado', 'Microphone muted') : tr('Micrófono activo', 'Microphone on'))
+    return mutedNow
+  }
 
   pc.onconnectionstatechange = () => {
     log('rtc: ' + pc.connectionState)
@@ -582,7 +650,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     try { if (eng === 'codex' && codexSession && codexSession.threadId) ctx.rest('/codexlive/stop', { method: 'POST', body: { threadId: codexSession.threadId }, timeoutMs: 8000 }).catch(() => {}) } catch {}
     try { pc.close() } catch {}
     try { audioCtx.close() } catch {}
-    bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false })
+    bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, muted: false })
   }
   return { close: () => { try { ctl.close && ctl.close() } catch {} } }
 }
@@ -961,7 +1029,7 @@ function ConfigForm({ ctx, dense = false }) {
       jsx(Switch, { checked: chatWork, onCheckedChange: v => setChatWork(!!v) }),
       jsxs('div', { style: { fontSize: 11.5, lineHeight: 1.3 }, children: [
         tr('Trabajar en el chat', 'Work in the chat'),
-        jsx('div', { style: { fontSize: 10, color: 'var(--ui-text-tertiary, #a1a1aa)' }, children: tr('La voz puede enviar tareas al chat abierto y leerte la respuesta.', 'Voice can send tasks to the open chat and read the reply back.') })
+        jsx('div', { style: { fontSize: 10, color: 'var(--ui-text-tertiary, #a1a1aa)' }, children: tr('Las tareas se ejecutan en el chat abierto, con sus tools y su modelo (tu config de Hermes). La voz no ejecuta nada por su cuenta.', 'Tasks run in the open chat with its tools and model (your Hermes config). The voice never runs anything on its own.') }),
       ] })
     ] }),
     jsx('div', { style: { ...label, marginTop: 6, marginBottom: 6, borderTop: '1px solid var(--ui-stroke-secondary, rgba(127,127,127,0.25))', paddingTop: 8 }, children: tr('Audio', 'Audio') }),
@@ -1232,6 +1300,19 @@ function MicIcon({ size = 15, color = 'currentColor' }) {
   })
 }
 
+function MicOffIcon({ size = 15, color = 'currentColor' }) {
+  return jsxs('svg', {
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+    stroke: color, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+    children: [
+      jsx('line', { x1: 2, y1: 2, x2: 22, y2: 22 }),
+      jsx('path', { d: 'M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6' }),
+      jsx('path', { d: 'M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23' }),
+      jsx('line', { x1: 12, y1: 19, x2: 12, y2: 22 })
+    ]
+  })
+}
+
 function GearIcon({ size = 12, color = 'currentColor' }) {
   return jsx('svg', {
     width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
@@ -1282,7 +1363,9 @@ function ComposerLiveButton({ ctx }) {
   const [busy, setBusy] = useState(false)
   const [cfg, setCfg] = useState(false)
   const [micHover, setMicHover] = useState(false)
+  const [muteHover, setMuteHover] = useState(false)
   const [gearHover, setGearHover] = useState(false)
+  const [trHover, setTrHover] = useState(false)
   const [showTr, setShowTr] = useState(false)
   const [profile, setProfile] = useState(() => ctx.storage.get(KEY_PROFILE) || '')
   const [voice, setVoice] = useState(() => ctx.storage.get(KEY_VOICE) || 'marin')
@@ -1393,6 +1476,23 @@ function ComposerLiveButton({ ctx }) {
             : jsx(MicIcon, { size: 15 })
         ]
       }),
+      live && jsx('button', {
+        type: 'button',
+        'data-context-menu-skip': 'true',
+        title: s.muted ? 'Activar micrófono' : 'Silenciar micrófono',
+        onClick: () => { try { window.__talkLiveHandle && window.__talkLiveHandle.toggleMute() } catch {} },
+        onMouseEnter: () => setMuteHover(true),
+        onMouseLeave: () => setMuteHover(false),
+        style: {
+          width: 22, height: 22, borderRadius: '50%', padding: 0, border: 'none', cursor: 'pointer',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          background: s.muted ? 'rgba(245,158,11,0.16)' : (muteHover ? 'var(--chrome-action-hover, rgba(0,0,0,0.08))' : 'transparent'),
+          color: s.muted ? '#f59e0b' : (muteHover ? 'var(--foreground, #18181b)' : 'var(--ui-text-tertiary, #71717a)'),
+          opacity: (s.muted || muteHover) ? 1 : 0.85,
+          transition: 'background 140ms, color 140ms'
+        },
+        children: s.muted ? jsx(MicOffIcon, { size: 13 }) : jsx(MicIcon, { size: 13 })
+      }),
       live && jsx('span', {
         'data-context-menu-skip': 'true',
         style: { display: 'inline-flex', alignItems: 'center' },
@@ -1404,12 +1504,14 @@ function ComposerLiveButton({ ctx }) {
               type: 'button',
               'data-context-menu-skip': 'true',
               title: 'Transcripción en vivo',
+              onMouseEnter: () => setTrHover(true),
+              onMouseLeave: () => setTrHover(false),
               style: {
                 width: 22, height: 22, borderRadius: '50%', padding: 0, border: 'none', cursor: 'pointer',
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                background: showTr ? 'var(--chrome-action-hover, rgba(0,0,0,0.08))' : 'transparent',
-                color: showTr ? '#3b82f6' : 'var(--ui-text-tertiary, #71717a)',
-                opacity: showTr ? 1 : 0.85,
+                background: (showTr || trHover) ? 'var(--chrome-action-hover, rgba(0,0,0,0.08))' : 'transparent',
+                color: showTr ? '#3b82f6' : (trHover ? 'var(--foreground, #18181b)' : 'var(--ui-text-tertiary, #71717a)'),
+                opacity: (showTr || trHover) ? 1 : 0.85,
                 transition: 'background 140ms, color 140ms'
               },
               children: jsx(TrIcon, { size: 13 })

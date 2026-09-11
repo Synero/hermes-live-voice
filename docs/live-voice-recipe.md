@@ -100,6 +100,23 @@ working result channel.
   (Plus ≈ 15–30 min, Pro 5x ≈ 1–2.5 h, Pro 20x unlimited). The plan-side counter is **not exposed**
   to clients (checked `wham/usage`, `account/rateLimits/read`, session events — `usage_limit` stays
   `null`), so metering is done locally from `audio_duration_ms`.
+- **Phantom tool work (plan drain)**: `clientManagedHandoffs: true` only gates whether the thread's
+  output streams back — the core **still routes every delegation into the Codex thread**, where the
+  agent runs real tool work in the background (file reads, shell, `custom_tool_call`s) on the user's
+  plan. Observed: dozens of hidden tool calls per call session and a visible jump in the weekly
+  bucket. Fix: in client mode pass `realtimeStartInstructions` telling the thread agent to reply
+  `skip` without tools; use real instructions only in server mode (the thread is the executor
+  there). Verified: routes still occur, **0 tool calls**.
+- **Delegation quality**: with no voice-side policy the model delegates *everything* (fragments,
+  fillers, "aló") — each becomes a full agent turn, and users interrupt turns while waiting. Put a
+  labelled **delegation policy** in the session instructions (delegate only action / fact requests;
+  clarify small ambiguities yourself; one short ack, then wait silently; read results back short)
+  and prepend a **per-turn note** when submitting to the chat (speech transcript may contain
+  mis-hearings → use the latest intent; reply short and plain for TTS; no markdown/lists).
+  Client-side: skip filler delegations and serialize runs (one task at a time).
+- **Aux-model trap**: a Hermes profile can bind auxiliary models (compression / approval / title /
+  mcp) to `openai-codex` — those quietly consume the same weekly plan bucket on every heavy turn.
+  Check before blaming the voice lane.
 - **ESM plugin syntax**: validate the desktop `plugin.js` with a module-mode syntax check
   (`node --check file.mjs`) **plus** a stub-import harness — `node --check file.js` can false-OK an
   ES module. See `tools/plugin-load-test.sh`.

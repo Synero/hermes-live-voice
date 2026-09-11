@@ -14,8 +14,8 @@ for the voice lane.
 - 🎧 **Full-duplex, interruptible voice** over WebRTC — audio goes device ↔ model directly (the server only brokers the session).
 - 🤖 **Persona-aware** — the voice session adopts the active bot's `SOUL.md` identity and language.
 - 📝 **Live transcript** — iMessage-style bubbles (you / bot), streaming deltas, tool activity chips.
-- 🛠️ **Tools from voice** — the model can run tasks: by default they are delegated into your **focused Hermes chat**, i.e. your own agent with **your** models and providers. An opt-in server-agent mode also exists.
-- 🎚️ **Audio controls** — pick microphone and output devices, built-in mic test with live level.
+- 🛠️ **Tools from voice** — the model can run tasks: by default they are delegated into your **focused Hermes chat**, i.e. your own agent with **your** models and providers. A voice-side delegation policy keeps this clean (only real task requests are delegated, fillers stay conversational) and an internal queue prevents overlapping runs. An opt-in server-agent mode also exists.
+- 🎚️ **Audio & call controls** — device pickers, built-in mic test, one-tap **mute** and hang-up right in the composer.
 - 📊 **Usage panels** — measured voice minutes (rolling windows) and the Codex plan bucket.
 
 ## Requirements
@@ -78,10 +78,15 @@ Full engineering recipe, protocol tables and gotchas:
 
 ## Status & roadmap
 
-⚠️ **Preview (0.1.x).** The backend currently imports helper modules from the authors' `hermes-talk`
+⚠️ **Preview (0.2.x).** The backend currently imports helper modules from the authors' `hermes-talk`
 package (an in-house Hermes plugin, being prepared for open source). The complete Live Voice
 implementation and the protocol documentation are included here for reference and integration work.
 A fully self-contained backend build is planned before a plugin-catalog submission.
+
+## Changelog
+
+- **0.2.0** — call controls (mute button, hover states) + delegation hardening: voice-side delegation policy, TTS-friendly reply note, filler filter, task queue, and neutralized background thread turns (the Codex plan no longer pays for invisible tool work).
+- **0.1.0** — initial public preview.
 
 ## License
 

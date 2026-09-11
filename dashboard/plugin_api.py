@@ -222,6 +222,7 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True):
             "res\u00famelo en voz alta con naturalidad, m\u00e1ximo 2-3 frases. Si no hay chat abierto, "
             "la herramienta te lo dir\u00e1."
         )
+    instructions += _VOICE_POLICY
     if profile:
         name = _bot_display_name(profile)
         if "You are Hermes, speaking live" in instructions:
@@ -764,17 +765,37 @@ def _codexlive_persona(profile: str | None) -> str:
         base = base.replace("You are Hermes, speaking live", f"You are {name}, speaking live", 1)
     base += _language_directive()
     base += (
-        f"\n\nVOZ: hablas con Nacho en una sesión de voz en vivo. Respuestas breves, naturales y al grano."
-        f" Para trabajo real (acciones, revisar, buscar, ejecutar) delega con tus herramientas;"
-        f" el resultado se leerá en voz alta. IDENTIDAD: eres {name}; si te preguntan quién eres,"
-        f" responde como {name} con su rol — nunca como un asistente genérico."
+        f"\n\nVOZ: hablas con el usuario en una sesión de voz en vivo. Respuestas breves, naturales y al grano."
+        f" IDENTIDAD: eres {name}; si te preguntan quién eres, responde como {name} con su rol — nunca como un asistente genérico."
     )
+    base += _VOICE_POLICY
     return base
 
 
 _AGENT_INSTR = (
     "Estás conectado a una sesión de voz en vivo con el usuario. Cuando la sesión de voz te delegue "
     "una petición, actúala con tus herramientas y responde conciso: tu texto se leerá en voz alta."
+)
+
+# Modo cliente (default): el CLIENTE ejecuta lo que la voz pide (chat de Hermes del usuario).
+# El core igual rutea cada delegación a este thread como fallback fantasma — si el agente
+# hiciera trabajo aquí (tool calls, gpt-5.6-sol), quemaría el plan ChatGPT y duplicaría todo.
+# Esta instrucción lo neutraliza: responder 'skip' sin usar herramientas.
+_AGENT_INSTR_SKIP = (
+    "Estás conectado a una sesión de voz en vivo, pero es el CLIENTE (la app) quien ejecuta las "
+    "peticiones de esa sesión. Si recibes un mensaje <realtime_delegation>, NO ejecutes nada, NO uses "
+    "herramientas y NO leas archivos: responde únicamente la palabra: skip"
+)
+
+# Política de delegación para el MODELO DE VOZ (el que decide qué pasa al backend).
+# Sin esto delega cualquier cosa (saludos, fragmentos, "aló") y satura el chat con turnos largos.
+_VOICE_POLICY = (
+    "\n\nVOICE DELEGATION POLICY (live call):\n"
+    "- Delegate to the chat/backend ONLY when the user asks you to DO something (check, review, find, run, make, fix, send, remember) or when answering needs real facts/actions from the backend.\n"
+    "- Do NOT delegate greetings, small talk, acknowledgements, filler, thinking out loud, fragments, or repeats of something already answered (e.g. 'dale', 'ok', 'ya', 'bueno', '¿aló?', '¿me escuchas?'). Answer those yourself, briefly, or stay quiet.\n"
+    "- If the request is unclear, ask ONE short clarifying question yourself instead of delegating.\n"
+    "- While a task is running: say ONE brief line ('dale, lo reviso') and WAIT silently; do not guess results, do not delegate again in the meantime; if the user speaks, tell them you are still on it.\n"
+    "- When the result arrives, read the key facts back in one or two short sentences."
 )
 
 
@@ -828,7 +849,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
         "version": "v3",
         "voice": voice or "cove",
         "prompt": persona,
-        "realtimeStartInstructions": _AGENT_INSTR,
+        "realtimeStartInstructions": _AGENT_INSTR if not client_managed else _AGENT_INSTR_SKIP,
         # Gestión de tareas delegadas por voz: POR DEFECTO el CLIENTE (el desktop) las
         # ejecuta en el chat de Hermes del usuario — usa SU configuración/modelos/providers.
         # Solo si settings.json lleva {"delegation": "server"} se deja que el core las
