@@ -335,7 +335,12 @@ function handleRealtimeEvent(msg, dc, ctx) {
     else if (tu.role === 'assistant') endBotTranscript(tu.transcript || '')
     return
   }
-  if (t === 'turn.created' || t === 'turn.delta') return
+  if (t === 'turn.created') {
+    const tu = msg.turn || {}
+    if (tu.role === 'assistant' && tu.id) currentBotTurnId = String(tu.id)
+    return
+  }
+  if (t === 'turn.delta') return
   if (t === 'session.usage.updated') { const au = msg.usage && msg.usage.audio_duration_ms; if (au) { try { liveAudioMs = Math.max(liveAudioMs || 0, Number(au) || 0) } catch {} } return }
   if (t === 'delegation.created') { handleDelegation(ctx, msg, dc); return }
   if (t === 'delegation.context.appended') {
@@ -467,9 +472,21 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
 
   // niveles por WebRTC stats (independiente de WebAudio — fallback sólido en Electron)
   const meter = { sMic: 0, sBot: 0 }
+  // umbral de barge-in: solo si el bot lleva >600ms hablando (evita cortar en pausas cortas)
+  let botSpeakingSince = 0
+  const maybeBarge = () => {
+    const now = Date.now()
+    if (bus.spkBot) {
+      if (!botSpeakingSince) botSpeakingSince = now
+      if (now - botSpeakingSince > 600 && (bus.micLevel || 0) > 0.11) doBargeIn()
+    } else {
+      botSpeakingSince = 0
+    }
+  }
 
   const pc = new RTCPeerConnection()
   stream.getTracks().forEach(t => pc.addTrack(t, stream))
+  _liveRefs = { pc, audioEl: null, ctx }
 
   // canal de eventos: transcripción en vivo + llamadas a tools
   const dc = pc.createDataChannel('oai-events')
@@ -488,6 +505,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     audioEl.srcObject = remoteStream
     audioEl.autoplay = true
     audioEl.play().catch(() => log('click para reproducir audio'))
+  if (_liveRefs) _liveRefs.audioEl = audioEl
     if (outId && audioEl.setSinkId) audioEl.setSinkId(outId).catch(e => log('salida: ' + e.message))
     const an = audioCtx.createAnalyser(); an.fftSize = 256
     const src = audioCtx.createMediaStreamSource(remoteStream)
@@ -509,6 +527,29 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     if (changed) _bumpTranscript()
   }, 1000)
   const ctl = { close: null }
+  // Barge-in: habla del usuario mientras el bot suena → cortar el turno (v3) y limpiar local.
+  let currentBotTurnId = ''
+  let bargeArmedAt = 0
+  let lastBargeAt = 0
+  const doBargeIn = () => {
+    const now = Date.now()
+    if (now - lastBargeAt < 1200) return
+    lastBargeAt = now
+    const hadTurn = !!currentBotTurnId
+    try {
+      pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio' && !mutedNow) s.track.enabled = true })
+    } catch {}
+    try { audioEl.pause(); audioEl.currentTime = 0; audioEl.play().catch(() => {}) } catch {}
+    bus.set({ spkBot: false, remoteLevel: 0, remBands: null })
+    pushTranscript('sys', tr('interrumpido — te escucho', 'interrupted — I am listening'))
+    if (!hadTurn) return
+    ;(async () => {
+      try {
+        await ctx.rest('/codexlive/interrupt', { method: 'POST', body: JSON.stringify({ turnId: currentBotTurnId }) })
+        currentBotTurnId = ''
+      } catch {}
+    })()
+  }
   // Mute del micrófono: alterna enabled en los tracks de audio del PC (robusto a fallback de device).
   let mutedNow = false
   ctl.toggleMute = () => {
@@ -626,6 +667,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       // escritura directa para las animaciones (rAF lee los campos);
       // emit a React solo ~5fps — evita el re-render storm que laggeaba el drag
       bus.micLevel = micLevel; bus.remoteLevel = botLevel; bus.bands = bands; bus.remBands = remBands
+      try { maybeBarge() } catch {}
       if (now - lastEmit > 200) { lastEmit = now; bus.emit() }
     }
   }
@@ -650,6 +692,9 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     try { if (eng === 'codex' && codexSession && codexSession.threadId) ctx.rest('/codexlive/stop', { method: 'POST', body: { threadId: codexSession.threadId }, timeoutMs: 8000 }).catch(() => {}) } catch {}
     try { pc.close() } catch {}
     try { audioCtx.close() } catch {}
+    _liveRefs = null
+    currentBotTurnId = ''
+    _botSpeakingSince = 0
     bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, muted: false })
   }
   return {
