@@ -322,6 +322,42 @@ function _runDelegation(ctx, dc, itemId, req) {
   })
 }
 
+// ── Barge-in (estado de módulo: lo escriben los eventos y lo lee el medidor) ──
+let currentBotTurnId = ''
+let _lastBargeAt = 0
+let _botSpeakingSince = 0
+let _liveRefs = null  // { pc, audioEl, ctx } — set por startLive
+
+function doBargeIn() {
+  const now = Date.now()
+  if (now - _lastBargeAt < 1200) return
+  _lastBargeAt = now
+  const refs = _liveRefs
+  const hadTurn = !!currentBotTurnId
+  try {
+    if (refs && refs.pc) refs.pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio') s.track.enabled = true })
+  } catch {}
+  try { if (refs && refs.audioEl) { refs.audioEl.pause(); refs.audioEl.currentTime = 0; refs.audioEl.play().catch(() => {}) } } catch {}
+  bus.set({ spkBot: false, remoteLevel: 0, remBands: null })
+  pushTranscript('sys', tr('interrumpido — te escucho', 'interrupted — I am listening'))
+  if (!refs || !hadTurn) return
+  const tid = currentBotTurnId
+  currentBotTurnId = ''
+  ;(async () => {
+    try { await refs.ctx.rest('/codexlive/interrupt', { method: 'POST', body: JSON.stringify({ turnId: tid }) }) } catch {}
+  })()
+}
+
+function maybeBarge() {
+  const now = Date.now()
+  if (bus.spkBot) {
+    if (!_botSpeakingSince) _botSpeakingSince = now
+    if (now - _botSpeakingSince > 600 && (bus.micLevel || 0) > 0.11) doBargeIn()
+  } else {
+    _botSpeakingSince = 0
+  }
+}
+
 function handleRealtimeEvent(msg, dc, ctx) {
   const t = msg && msg.type
   if (!t) return
@@ -527,29 +563,6 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     if (changed) _bumpTranscript()
   }, 1000)
   const ctl = { close: null }
-  // Barge-in: habla del usuario mientras el bot suena → cortar el turno (v3) y limpiar local.
-  let currentBotTurnId = ''
-  let bargeArmedAt = 0
-  let lastBargeAt = 0
-  const doBargeIn = () => {
-    const now = Date.now()
-    if (now - lastBargeAt < 1200) return
-    lastBargeAt = now
-    const hadTurn = !!currentBotTurnId
-    try {
-      pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio' && !mutedNow) s.track.enabled = true })
-    } catch {}
-    try { audioEl.pause(); audioEl.currentTime = 0; audioEl.play().catch(() => {}) } catch {}
-    bus.set({ spkBot: false, remoteLevel: 0, remBands: null })
-    pushTranscript('sys', tr('interrumpido — te escucho', 'interrupted — I am listening'))
-    if (!hadTurn) return
-    ;(async () => {
-      try {
-        await ctx.rest('/codexlive/interrupt', { method: 'POST', body: JSON.stringify({ turnId: currentBotTurnId }) })
-        currentBotTurnId = ''
-      } catch {}
-    })()
-  }
   // Mute del micrófono: alterna enabled en los tracks de audio del PC (robusto a fallback de device).
   let mutedNow = false
   ctl.toggleMute = () => {
