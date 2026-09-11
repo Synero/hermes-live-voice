@@ -50,6 +50,18 @@ The desktop app discovers the desktop half from the plugin folder
    (`talk-desktop`), and `plugin.js` must sit at the folder root.
 3. In the app: `Ctrl/Cmd+K` → **“Reload desktop plugins”**.
 
+## Troubleshooting — first run
+
+- **No sign-in prompt?** The voice session needs a ChatGPT-plan Codex login. Open the mic
+  config (gear while the plugin is visible) → the auth card shows your sign-in state and a
+  **Iniciar sesión** button: it opens `auth.openai.com/codex/device` with a code to type.
+  Nothing to copy by hand from a terminal.
+- **`codex` not found in the dashboard logs?** The backend resolves `codex` from
+  `~/.local/bin`, `$PATH` and `/usr/local/bin`. If your service runs with a minimal
+  `PATH`, add the codex bin directory to the service environment.
+- **Persona too generic?** The voice reads the focused bot's `SOUL.md`. No bot focused →
+  it uses your Hermes default identity.
+
 ## First run
 
 1. The mic button appears in the composer (next to the `+` row). Click to start a call.
@@ -87,6 +99,15 @@ A fully self-contained backend build is planned before a plugin-catalog submissi
 
 - **0.2.0** — call controls (mute button, hover states) + delegation hardening: voice-side delegation policy, TTS-friendly reply note, filler filter, task queue, and neutralized background thread turns (the Codex plan no longer pays for invisible tool work).
 - **0.1.0** — initial public preview.
+
+## Credits
+
+Voice auth, session minting and identity plumbing are derived from
+[TheSmokeDev/hermes-talk](https://github.com/TheSmokeDev/hermes-talk) (MIT) —
+bundled in `dashboard/talk_vendor/` with attribution in `NOTICE.md`. The
+plugin prefers the full hermes-talk when it's installed (native voice tools,
+run steering, cascade modes); the bundled fallback keeps fresh installs
+self-contained.
 
 ## License
 

@@ -36,18 +36,29 @@ import time
 from pathlib import Path
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+# Self-contained install: bundled fallback first (dashboard/talk_vendor),
+# upstream hermes-talk (if installed) second so it wins when present.
+_VENDOR_ROOT = _PLUGIN_ROOT / "dashboard" / "talk_vendor"
 _HERMES_TALK_ROOT = Path.home() / ".hermes" / "plugins" / "hermes-talk"
-for _p in (str(_PLUGIN_ROOT), str(_HERMES_TALK_ROOT)):
+for _p in (str(_VENDOR_ROOT), str(_PLUGIN_ROOT), str(_HERMES_TALK_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import talk_auth  # noqa: E402
-import talk_capabilities  # noqa: E402
-import talk_config  # noqa: E402
-import talk_host  # noqa: E402
-import talk_identity  # noqa: E402
-import talk_tools  # noqa: E402
-import talk_wire  # noqa: E402
+def _load_talk_module(name: str):
+    """Prefer an installed hermes-talk; fall back to the bundled vendor copy."""
+    try:
+        return __import__(name)
+    except ImportError:
+        return __import__(f"talk_vendor.{name}", fromlist=[name])
+
+
+talk_auth = _load_talk_module("talk_auth")
+talk_capabilities = _load_talk_module("talk_capabilities")
+talk_config = _load_talk_module("talk_config")
+talk_identity = _load_talk_module("talk_identity")
+talk_host = _load_talk_module("talk_host")
+talk_tools = _load_talk_module("talk_tools")
+talk_wire = _load_talk_module("talk_wire")
 
 try:
     from fastapi import APIRouter, HTTPException, Request
@@ -134,6 +145,20 @@ def _bot_identity_sections(profile: str) -> dict[str, str]:
     return sections
 
 
+def _voice_config() -> str:
+    """Default voice from env TALK_VOICE or config.yaml (memory.voice)."""
+    env = (os.environ.get("TALK_VOICE") or "").strip()
+    if env:
+        return env.lower()
+    try:
+        text = (talk_config.get_hermes_home() / "config.yaml").read_text(
+            encoding="utf-8", errors="replace")[:262144]
+    except OSError:
+        return ""
+    m = re.search(r"^\s{0,2}voice:\s*([\w-]+)\s*$", text, re.M)
+    return m.group(1).lower() if m else ""
+
+
 _DIRECTIVE_PATH = _PLUGIN_ROOT / "language_directive.txt"
 _LANGUAGE_DIRECTIVE_DEFAULT = (
     "\n\nIDIOMA Y VOZ: Habla en el idioma en que te habla el usuario — si te habla en español, "
@@ -163,7 +188,7 @@ def _resolve_voice(requested: str | None) -> str:
             return v
         raise HTTPException(status_code=400, detail=f"voice '{v}' no disponible")
     try:
-        return talk_config.voice() or "marin"
+        return (getattr(talk_config, "voice", None) or _voice_config)() or "marin"
     except Exception:  # noqa: BLE001
         return "marin"
 
