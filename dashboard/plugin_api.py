@@ -881,6 +881,11 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
                 start = len(_CL["notifs"])
                 _cl_request("thread/realtime/start", params, timeout=25)
                 break
+            if "usage limit" in low or "hit your usage" in low:
+                raise RuntimeError(
+                    "LIVE_SIN_QUOTA: el plan ChatGPT llegó a su límite semanal (Live Voice comparte esa cuota). "
+                    "Cambia el Motor de voz a gpt-realtime-2.1 en la configuración, o espera el reset semanal."
+                )
             if "already" in low:
                 # sesión realtime colgada en el thread: cerrarla y reintentar
                 try:

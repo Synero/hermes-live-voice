@@ -1495,7 +1495,15 @@ function ComposerLiveButton({ ctx }) {
     try {
       window.__talkLiveHandle = await startLive(ctx, { profile: effProfile, voice: vv, micId, outId, engine: eng, log: () => {} })
     } catch (e) {
-      const m = String(e?.message || e).slice(0, 240)
+      let m = String(e?.message || e)
+      if (m.indexOf('LIVE_SIN_QUOTA') >= 0) {
+        m = m.replace('LIVE_SIN_QUOTA: ', '')
+        try {
+          ctx.storage.set(KEY_ENGINE, 'realtime')
+          pushTranscript('sys', tr('Plan semanal sin quota: motor cambiado a gpt-realtime-2.1 — prueba de nuevo.', 'Weekly plan out of quota: engine switched to gpt-realtime-2.1 — try again.'))
+        } catch {}
+      }
+      m = m.slice(0, 240)
       bus.set({ err: m, live: false, stage: 'error', widget: true, micLevel: 0, remoteLevel: 0 })
       try { if (sdk.host && sdk.host.notifyError) sdk.host.notifyError(String(m), 'Live Voice') } catch {}
     } finally { setBusy(false) }
