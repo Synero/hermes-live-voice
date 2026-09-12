@@ -90,15 +90,31 @@ Full engineering recipe, protocol tables and gotchas:
 
 ## Status & roadmap
 
-⚠️ **Preview (0.2.x).** The backend currently imports helper modules from the authors' `hermes-talk`
-package (an in-house Hermes plugin, being prepared for open source). The complete Live Voice
-implementation and the protocol documentation are included here for reference and integration work.
-A fully self-contained backend build is planned before a plugin-catalog submission.
+⚠️ **Preview (0.2.x).** The backend resolves its voice plumbing at import time in this order: the
+full [`hermes-talk`](https://github.com/TheSmokeDev/hermes-talk) plugin when it is installed (richer
+— native voice tools, run steering, cascade modes), otherwise the MIT-licensed fallback bundled in
+`dashboard/talk_vendor/`, so a fresh install with no other plugin mounts correctly (covered by a
+regression test that runs with an empty `HOME` and no `hermes-talk` present). Runtime dependencies
+are the Hermes dashboard's own (`fastapi`, `httpx`); the desktop half has no build step. The complete
+Live Voice implementation and the protocol documentation are included here for reference and
+integration work.
 
 ## Changelog
 
+- **0.2.1** — audit fixes: the backend now imports its **bundled** `talk_vendor` fallback on fresh installs (previously it needed `hermes-talk` installed); a concurrent `/session` pair no longer deadlocks the event loop; app-server RPC correlation survives reader-buffer pruning; `/codexlive/interrupt` runs off the event loop; `CODEX_HOME` is honored consistently across login/backup/logout; when an older app-server drops `clientManagedHandoffs` the response now carries `droppedFields`/`handoffDegraded`/`warning` and the desktop shows a notice instead of failing silently; the desktop interrupt call sends a plain object body (no double-encoding) and a muted mic can no longer be un-muted by barge-in.
 - **0.2.0** — call controls (mute button, hover states) + delegation hardening: voice-side delegation policy, TTS-friendly reply note, filler filter, task queue, and neutralized background thread turns (the Codex plan no longer pays for invisible tool work).
 - **0.1.0** — initial public preview.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+Regression tests for the audit findings in issue #1 (no network, no `codex` binary, no OpenAI
+calls — stdlib + pytest only). CI additionally verifies the bundled fallback imports on a
+clean environment (empty `HOME`, no site-packages), compiles the backend, syntax-checks the
+desktop half and runs the ESM load harness.
 
 ## Credits
 
@@ -108,6 +124,9 @@ bundled in `dashboard/talk_vendor/` with attribution in `NOTICE.md`. The
 plugin prefers the full hermes-talk when it's installed (native voice tools,
 run steering, cascade modes); the bundled fallback keeps fresh installs
 self-contained.
+
+Thanks to **[@whyyagswhy](https://github.com/whyyagswhy)** for the external audit
+and the reproduction script behind the 0.2.1 fixes.
 
 ## License
 
