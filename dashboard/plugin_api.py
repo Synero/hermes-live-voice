@@ -36,8 +36,11 @@ import time
 from pathlib import Path
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+_TALK_VENDOR_ROOT = _PLUGIN_ROOT / "dashboard" / "talk_vendor"
 _HERMES_TALK_ROOT = Path.home() / ".hermes" / "plugins" / "hermes-talk"
-for _p in (str(_PLUGIN_ROOT), str(_HERMES_TALK_ROOT)):
+# Orden de precedencia (el último insertado gana): el plugin hermes-talk completo
+# si está instalado; si no, el bundle vendorizado que viaja en el repo.
+for _p in (str(_PLUGIN_ROOT), str(_TALK_VENDOR_ROOT), str(_HERMES_TALK_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
