@@ -331,6 +331,7 @@ let _liveRefs = null  // { pc, audioEl, ctx } — set por startLive
 function doBargeIn() {
   const now = Date.now()
   if (now - _lastBargeAt < 1200) return
+  if (bus.muted) return  // con el mic silenciado no hay barge-in que hacer
   _lastBargeAt = now
   const refs = _liveRefs
   const hadTurn = !!currentBotTurnId
@@ -344,11 +345,12 @@ function doBargeIn() {
   const tid = currentBotTurnId
   currentBotTurnId = ''
   ;(async () => {
-    try { await refs.ctx.rest('/codexlive/interrupt', { method: 'POST', body: JSON.stringify({ turnId: tid }) }) } catch {}
+    try { await refs.ctx.rest('/codexlive/interrupt', { method: 'POST', body: { turnId: tid }, timeoutMs: 5000 }) } catch {}
   })()
 }
 
 function maybeBarge() {
+  if (bus.muted) { _botSpeakingSince = 0; return }
   const now = Date.now()
   if (bus.spkBot) {
     if (!_botSpeakingSince) _botSpeakingSince = now
@@ -601,6 +603,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     }
     codexSession = r2
     handoffMode = (r2.handoff === 'server') ? 'server' : 'client'
+    if (r2.handoffDegraded) pushTranscript('sys', tr('Aviso: este servidor no soporta clientManagedHandoffs; las tareas de voz pueden ejecutarse en el lane ChatGPT del agente en vez de tu chat.', 'Notice: this server does not support clientManagedHandoffs; voice tasks may run on the agent ChatGPT lane instead of your chat.'))
     bus.botName = r2.botName || bus.botName || ''
     await pc.setRemoteDescription({ type: 'answer', sdp: r2.answer })
   } else {
@@ -672,7 +675,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       }
     } catch {}
     // combinar fuentes: RMS (time-domain) + espectro + stats del bot
-    const micLevel = Math.min(1, Math.max(m, rmsM))
+    const micLevel = bus.muted ? 0 : Math.min(1, Math.max(m, rmsM))
     const botLevel = Math.min(1, Math.max(r, rmsR, meter.sBot))
     const now = performance.now()
     if (now - lastPush > 55) {
