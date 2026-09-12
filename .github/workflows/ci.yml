@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test deps
+        run: pip install pytest fastapi
+      - name: Tests
+        run: python -m pytest -q
+      - name: Compile backend
+        run: python -m py_compile dashboard/plugin_api.py
+      - name: Syntax-check desktop half
+        run: node --check desktop/plugin.js
+      - name: Desktop plugin load harness (ESM import with stubs)
+        run: bash tools/plugin-load-test.sh
