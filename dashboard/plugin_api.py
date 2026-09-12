@@ -351,7 +351,8 @@ def _start_codex_login() -> dict:
             except OSError:
                 pass
         env = os.environ.copy()
-        env.pop("CODEX_HOME", None)  # el login escribe el ~/.codex estándar
+        # El home resuelto (CODEX_HOME si está definido) es el mismo que usan
+        # backup/estado/logout: no se poppea para que todo lea el mismo auth.json.
         proc = subprocess.Popen(
             [binary, "login", "--device-auth"],
             stdin=subprocess.DEVNULL,
@@ -402,18 +403,25 @@ if router is not None:
         if profile and _profile_home(profile) is None:
             raise HTTPException(status_code=400, detail=f"perfil '{profile}' no existe")
         voice = _resolve_voice(body.get("voice"))
-        # Serializar mints con identity override: el patch de get_hermes_home es
-        # global al proceso mientras dura _mint_for; un mint a la vez.
-        with _MINT_LOCK:
-            if profile:
-                orig = talk_config.get_hermes_home
-                talk_config.get_hermes_home = lambda: _profile_home(profile)
-                try:
-                    descriptor, auth = await asyncio.to_thread(_mint_for, profile, voice, allow_chat)
-                finally:
-                    talk_config.get_hermes_home = orig
-            else:
-                descriptor, auth = await asyncio.to_thread(_mint_for, None, voice, allow_chat)
+
+        def _do():
+            # Serializar mints con identity override: el patch de get_hermes_home es
+            # global al proceso mientras dura _mint_for; un mint a la vez. El lock
+            # vive en este worker, no en el coroutine: un threading.Lock tomado a
+            # través de un await bloquea el event loop — al esperar el lock, el
+            # callback que lo liberaría no puede correr (deadlock). Así el override
+            # también se restaura en el mismo worker que mintea.
+            with _MINT_LOCK:
+                if profile:
+                    orig = talk_config.get_hermes_home
+                    talk_config.get_hermes_home = lambda: _profile_home(profile)
+                    try:
+                        return _mint_for(profile, voice, allow_chat)
+                    finally:
+                        talk_config.get_hermes_home = orig
+                return _mint_for(None, voice, allow_chat)
+
+        descriptor, auth = await asyncio.to_thread(_do)
         return {
             "ok": True,
             "profile": profile,
@@ -692,11 +700,12 @@ def _cl_reader(proc) -> None:
 def _cl_request(method: str, params: dict, timeout: float = 30.0):
     _CL["seq"] += 1
     rid = _CL["seq"]
-    start = len(_CL["notifs"])
     _cl_send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
     t0 = time.time()
     while time.time() - t0 < timeout:
-        for m in list(_CL["notifs"])[start:]:
+        # Escanear por id: el pruner de _cl_reader borra el inicio del buffer, así
+        # que una posición `start` puede quedar stale y perder la respuesta.
+        for m in list(_CL["notifs"]):
             if m.get("id") == rid:
                 if "error" in m:
                     raise RuntimeError(str(m["error"].get("message") or m["error"])[:400])
@@ -861,6 +870,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
         "delegationAckFiller": True,
     }
     drop_groups = (("delegationAckFiller",), ("clientManagedHandoffs",), ("realtimeStartInstructions", "prompt"))
+    dropped: list[str] = []
     start = len(_CL["notifs"])
     gi = 0
     while True:
@@ -871,7 +881,9 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
             low = str(exc).lower()
             if "unknown field" in low and gi < len(drop_groups):
                 for f in drop_groups[gi]:
-                    params.pop(f, None)
+                    if f in params:
+                        params.pop(f)
+                        dropped.append(f)
                 gi += 1
                 start = len(_CL["notifs"])
                 continue
@@ -916,8 +928,16 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
         time.sleep(0.15)
     if not answer:
         raise TimeoutError("codex live: sin SDP de respuesta")
-    return {"answer": answer, "realtimeSessionId": rsid, "threadId": params.get("threadId") or tid, "version": "v3", "engine": "codex",
-            "handoff": "client" if client_managed else "server"}
+    result = {"answer": answer, "realtimeSessionId": rsid, "threadId": params.get("threadId") or tid, "version": "v3", "engine": "codex",
+              "handoff": "client" if client_managed else "server"}
+    if dropped:
+        _log.warning("codex live: app-server no soporta %s (se omitieron)", ", ".join(dropped))
+        result["droppedFields"] = dropped
+        if "clientManagedHandoffs" in dropped and client_managed:
+            result["handoffDegraded"] = True
+            result["warning"] = ("el app-server no soporta clientManagedHandoffs: las delegaciones de voz pueden ejecutarse "
+                                 "en el hilo del agente (lane ChatGPT) en vez del chat del cliente")
+    return result
 
 
 def _codexlive_stop(thread_id: str | None) -> None:
@@ -974,7 +994,9 @@ if router is not None:
         if not turn_id or not thread_id:
             return {"ok": False, "error": "faltan turnId/threadId"}
         try:
-            _cl_request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id}, timeout=8)
+            await asyncio.to_thread(
+                _cl_request, "turn/interrupt", {"threadId": thread_id, "turnId": turn_id}, timeout=8
+            )
             return {"ok": True}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)[:200]}
