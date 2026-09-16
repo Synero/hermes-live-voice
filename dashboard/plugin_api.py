@@ -231,7 +231,7 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True):
         if "You are Hermes, speaking live" in instructions:
             instructions = instructions.replace("You are Hermes, speaking live", f"You are {name}, speaking live", 1)
         instructions += (
-            f"\n\nIDENTIDAD: Eres {name} (agente de Nacho en el VPS). Si te preguntan quién eres, "
+            f"\n\nIDENTIDAD: Eres {name}. Si te preguntan quién eres, "
             f"responde como {name} con su rol — nunca digas que eres Hermes, un modelo, ni un asistente genérico."
         )
     auth = talk_auth.resolve_auth()
