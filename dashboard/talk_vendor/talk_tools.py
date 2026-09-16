@@ -18,6 +18,6 @@ def default_talk_tools():
 
 def execute_talk_tool(name, arguments):
     raise TalkToolError(
-        f"la tool de voz '{name}' no está disponible en esta instalación; "
-        "usa 'Trabajar en el chat' para tareas reales"
+        f"the voice tool '{name}' is not available in this installation; "
+        "use 'Work in the chat' for real tasks"
     )

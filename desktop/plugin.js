@@ -148,17 +148,15 @@ let _delegating = null
 
 // Voz → Chat: envía la petición al chat ENFOCADO (el agente real responde ahí,
 // streaming visible en la ventana) y devuelve el texto de la respuesta para leerlo.
-const _voiceNote = () => (EN
-  ? '[voice] Reply briefly and naturally so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors, use the latest intent. Do not claim something is done before it actually is.\n\n'
-  : '[voz] Responde breve y natural para LEER EN VOZ ALTA (2-4 frases, sin markdown ni listas). El texto es dictado y puede tener errores; usa la última intención. No afirmes que algo quedó hecho antes de hacerlo.\n\n')
+const _voiceNote = () => '[voice] Reply briefly and naturally in the user’s language so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors; use the latest intent. Do not claim something is done before it actually is.\n\n'
 
 async function delegateToChat(text) {
   const req = String(text || '').trim()
-  if (!req) return 'Petición vacía.'
-  if (_delegating && _delegating.text === req && Date.now() - _delegating.at < 30000) return 'Esa petición ya está en curso en el chat; espera su respuesta.'
+  if (!req) return 'Empty request.'
+  if (_delegating && _delegating.text === req && Date.now() - _delegating.at < 30000) return 'That request is already in progress in the chat; wait for its response.'
   const atomGet = v => { try { return v && typeof v.get === 'function' ? v.get() : v } catch { return null } }
   const sid = String(atomGet(host.state.focusedSessionId) || atomGet(host.state.activeSessionId) || '')
-  if (!sid) return 'No hay una conversación abierta en la ventana. Dile al usuario que abra el chat donde quieres trabajar y que repita la petición.'
+  if (!sid) return 'No conversation is open in the window. Tell the user to open the chat where they want to work and repeat the request.'
   _delegating = { text: req, at: Date.now() }
   pushTranscript('tool', 'trabajando en el chat…')
   let acc = ''
@@ -185,18 +183,18 @@ async function delegateToChat(text) {
         unsubs.push(host.onEvent('error', ev => {
           if (settled || !same(ev)) return
           settled = true
-          errText = 'Error del agente: ' + String((ev && (ev.message || ev.error || (ev.payload || {}).message)) || 'desconocido')
+          errText = 'Agent error: ' + String((ev && (ev.message || ev.error || (ev.payload || {}).message)) || 'unknown')
         }))
       }
       await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
     } catch (e) {
-      return 'No se pudo enviar al chat: ' + String((e && e.message) || e || 'error')
+      return 'Could not send to the chat: ' + String((e && e.message) || e || 'error')
     }
     const t0 = Date.now()
     while (!settled && Date.now() - t0 < 240000) await sleep(300)
-    if (!settled) return 'El agente sigue trabajando en el chat; avísale al usuario que la respuesta aparecerá ahí en un momento.'
+    if (!settled) return 'The agent is still working in the chat; tell the user the response will appear there shortly.'
     const out = (errText || finalText || acc).trim()
-    return out ? out.slice(0, 4000) : 'El agente terminó sin texto visible.'
+    return out ? out.slice(0, 4000) : 'The agent finished without visible text.'
   } finally {
     _delegating = null
     for (const u of unsubs) { try { u() } catch {} }
@@ -209,7 +207,7 @@ async function runVoiceTool(ctx, callId, name, args, dc) {
   if (name === 'send_to_chat') {
     // ack hablado: confirmación breve mientras el chat trabaja
     try {
-      dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: '[El agente real YA está trabajando en el chat del usuario con esta petición. Ahora dile al usuario UNA sola frase muy breve (máximo 8 palabras) en SU idioma confirmando que lo estás gestionando; no des resultados aún.]' }] } }))
+      dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: '[The real agent is ALREADY working on this request in the user’s chat. Now say ONE very short sentence (at most 8 words) in THEIR language confirming that you are handling it; do not give any results yet.]' }] } }))
       dc.send(JSON.stringify({ type: 'response.create' }))
     } catch {}
     output = await delegateToChat(String((args && (args.request || args.text)) || ''))
@@ -218,7 +216,7 @@ async function runVoiceTool(ctx, callId, name, args, dc) {
       const r = await ctx.rest('/tool', { method: 'POST', body: { name: name, arguments: args || {} }, timeoutMs: 125000 })
       output = (r && r.output) || ''
     } catch (e) {
-      output = 'La herramienta ' + name + ' falló: ' + String((e && e.message) || e).slice(0, 160)
+      output = 'The tool ' + name + ' failed: ' + String((e && e.message) || e).slice(0, 160)
     }
   }
   pushTranscript('tool', '→ ' + String(output).slice(0, 400))
@@ -244,7 +242,7 @@ function _isJunkDelegation(t) {
 
 function _plainForVoice(t) {
   let s = String(t || '')
-  s = s.replace(/```[\s\S]*?```/g, ' ' + tr('(bloque de código omitido)', '(code block omitted)') + ' ')
+  s = s.replace(/```[\s\S]*?```/g, ' (code block omitted) ')
   s = s.replace(/`([^`]*)`/g, '$1')
   s = s.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1')
   s = s.replace(/^#{1,6}\s+/gm, '')
@@ -280,19 +278,19 @@ function handleDelegation(ctx, msg, dc) {
   }
   if (_isJunkDelegation(req)) {
     pushTranscript('tool', tr('charla (no es tarea) — la voz responde sola', 'small talk (not a task) — voice answers itself'))
-    _delegRespond(dc, itemId, tr('El usuario solo estaba conversando, no pidiendo trabajo. Responde tú breve y natural; si te estaba preguntando por algo en curso, dile que sigues en eso. No hay nada que ejecutar.', 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.'))
+    _delegRespond(dc, itemId, 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.')
     return
   }
   const chatWork = (ctx.storage.get(KEY_CHAT) || '1') !== '0'
   if (!chatWork) {
     pushTranscript('sys', tr('Tareas desactivadas: activa "Trabajar en el chat".', 'Tasks are off: enable "Work in the chat".'))
-    _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
+    _delegRespond(dc, itemId, 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.')
     return
   }
   if (_delegBusy) {
     _delegQueue = { req, itemId, at: Date.now() }
     pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
-    _delegRespond(dc, itemId, tr('Ya hay una tarea en curso. Dile al usuario que sigues trabajando en eso; si lo que dijo es una corrección, se verá reflejada en el resultado, y si es algo nuevo, espera a que termine lo actual.', 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.'))
+    _delegRespond(dc, itemId, 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.')
     return
   }
   _runDelegation(ctx, dc, itemId, req)
@@ -304,10 +302,10 @@ function _runDelegation(ctx, dc, itemId, req) {
     let out = ''
     try { out = await delegateToChat(req) } catch (e) { out = '' }
     out = String(out || '').trim()
-    if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
+    if (!out) out = 'The task could not be completed in the chat.'
     const forVoice = _plainForVoice(out)
     pushTranscript('tool', tr('resultado: ', 'result: ') + forVoice.slice(0, 160))
-    _delegRespond(dc, itemId, tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): ', 'Task result (answer the user with this, briefly and naturally): ') + forVoice)
+    _delegRespond(dc, itemId, 'Task result (answer the user with this, briefly and naturally): ' + forVoice)
   })().catch(() => {}).then(() => {
     _delegBusy = false
     const q = _delegQueue
@@ -317,7 +315,7 @@ function _runDelegation(ctx, dc, itemId, req) {
       _runDelegation(ctx, dc, q.itemId, q.req)
     } else if (q) {
       pushTranscript('sys', tr('La tarea en cola quedó obsoleta y no se ejecutó.', 'Queued task went stale and was not run.'))
-      _delegRespond(dc, q.itemId, tr('La tarea en cola quedó obsoleta y no se ejecutó. Dile al usuario que si todavía la quiere, la repita y la ejecutas al tiro.', 'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.'))
+      _delegRespond(dc, q.itemId, 'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.')
     }
   })
 }
@@ -870,9 +868,9 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
     }, 200)
   })
   await new Promise(r => setTimeout(r, 500))
-  const phrase = tr(
-    'Di en voz alta exactamente esta frase, sin agregar nada más ni saludar: «Hola Nacho, esta es la voz ' + voice + ', así sueno cuando hablamos.»',
-    'Say out loud exactly this sentence, adding nothing else: "Hi Nacho, this is voice ' + voice + ', this is how I sound when we talk."')
+  const phrase = 'Say out loud exactly this sentence, adding nothing else: ' + tr(
+    '«Hola, esta es la voz ' + voice + ', así sueno cuando hablamos.»',
+    '"Hi, this is voice ' + voice + ', this is how I sound when we talk."')
   try {
     if (eng === 'codex') {
       dc.send(JSON.stringify({ type: 'session.context.append', content: [{ type: 'input_text', text: phrase }] }))
