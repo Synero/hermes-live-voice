@@ -164,11 +164,11 @@ def test_codexlive_start_reports_dropped_capability_fields():
 
     ns["_log"] = LogStub()
     ns["_cl_ensure"] = lambda: None
-    ns["_cl_thread_ensure"] = lambda: "tid-1"
-    ns["_codexlive_persona"] = lambda profile: "persona"
+    ns["_cl_thread_ensure"] = lambda language: "tid-1"
+    ns["_codexlive_persona"] = lambda profile, language: "persona"
     ns["_talk_settings"] = lambda: {"delegation": "client"}
-    ns["_AGENT_INSTR"] = "agent"
-    ns["_AGENT_INSTR_SKIP"] = "skip"
+    ns["_AGENT_INSTR"] = {"es": "agent"}
+    ns["_AGENT_INSTR_SKIP"] = {"es": "skip"}
 
     calls = {"start": 0}
 

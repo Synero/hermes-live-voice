@@ -138,24 +138,36 @@ def _bot_identity_sections(profile: str) -> dict[str, str]:
 
 
 _DIRECTIVE_PATH = _PLUGIN_ROOT / "language_directive.txt"
-_LANGUAGE_DIRECTIVE_DEFAULT = (
-    "\n\nLANGUAGE AND VOICE: Speak the language the user speaks to you — if they speak Spanish, "
-    "reply in natural Chilean Spanish; if they speak English, reply in English. Never mix languages "
-    "or reply in English when the user speaks Spanish. Your voice should sound like a native speaker "
-    "of the language you are using."
-)
+_LANGUAGE_DIRECTIVE_DEFAULT = {
+    "es": (
+        '\n\nIDIOMA Y VOZ: Habla en el idioma en que te habla el usuario — si te habla en español, responde en '
+        'español natural de Chile; si te habla en inglés, en inglés. Nunca mezcles idiomas ni respondas en '
+        'inglés cuando te hablan en español. Tu voz debe sonar como la de un hablante nativo del idioma que '
+        'estés usando.'
+    ),
+    "en": (
+        '\n\nLANGUAGE AND VOICE: Speak the language the user speaks to you — if they speak Spanish, reply in '
+        'natural Chilean Spanish; if they speak English, reply in English. Never mix languages or reply in '
+        'English when the user speaks Spanish. Your voice should sound like a native speaker of the language '
+        'you are using.'
+    ),
+}
+
+_LANGUAGE_DIRECTIVE_BUNDLE = "\n\n".join(value.strip() for value in _LANGUAGE_DIRECTIVE_DEFAULT.values())
 
 
-def _language_directive() -> str:
-    """Directiva de idioma editable en runtime (archivo sin restart) con default embebido."""
+def _language_directive(language: str = "es") -> str:
+    """Select shipped defaults by locale; preserve custom file content verbatim."""
     try:
         if _DIRECTIVE_PATH.is_file():
-            text = _DIRECTIVE_PATH.read_text(encoding="utf-8").strip()
-            if text:
+            text = _DIRECTIVE_PATH.read_text(encoding="utf-8")
+            shipped = {value.strip() for value in _LANGUAGE_DIRECTIVE_DEFAULT.values()}
+            shipped.add(_LANGUAGE_DIRECTIVE_BUNDLE)
+            if text.strip() and text.strip() not in shipped:
                 return "\n\n" + text
     except OSError:
         pass
-    return _LANGUAGE_DIRECTIVE_DEFAULT
+    return _LANGUAGE_DIRECTIVE_DEFAULT["en" if language == "en" else "es"]
 
 
 def _resolve_voice(requested: str | None) -> str:
@@ -199,7 +211,7 @@ def _send_to_chat_tool() -> dict:
     }
 
 
-def _mint_for(profile: str | None, voice: str, allow_chat: bool = True):
+def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language: str = "es"):
     """Mint con identity del bot (o del host si no se pide profile)."""
     tools = talk_tools.default_talk_tools()
     if allow_chat:
@@ -214,24 +226,39 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True):
         lane="dashboard",
         capabilities=talk_capabilities.instruction_section(),
     )
-    instructions = instructions + _language_directive()
+    instructions = instructions + _language_directive(language)
     if allow_chat:
         instructions += (
-            "\n\nVOICE + CHAT: The user has a chat open in the app. Answer quick questions and "
-            "small talk directly yourself. When they ask for REAL WORK (doing, creating, reviewing, "
-            "searching their information, or taking action), call send_to_chat with the complete "
-            "request phrased naturally in their language. The system sends it to their open chat, "
-            "where the real agent replies. You will then receive the result; read or summarize it "
-            "aloud naturally in no more than 2-3 sentences. If no chat is open, the tool will tell you."
+            (
+                "\n\nVOICE + CHAT: The user has a chat open in the app. Answer quick questions and "
+                "small talk directly yourself. When they ask for REAL WORK (doing, creating, reviewing, "
+                "searching their information, or taking action), call send_to_chat with the complete "
+                "request phrased naturally in their language. The system sends it to their open chat, "
+                "where the real agent replies. You will then receive the result; read or summarize it "
+                "aloud naturally in no more than 2-3 sentences. If no chat is open, the tool will tell you."
+            ) if language == "en" else (
+                "\n\nVOZ + CHAT: el usuario tiene un chat abierto en la aplicaci\u00f3n. Para conversaci\u00f3n "
+                "r\u00e1pida, preguntas simples o charla, responde T\u00da directo. Cuando pida TRABAJO REAL "
+                "(hacer, crear, revisar, buscar en sus cosas, actuar sobre algo), llama a send_to_chat con la "
+                "petici\u00f3n completa y natural en su idioma: el sistema la env\u00eda a su chat abierto, el "
+                "agente real responde all\u00ed, y luego recibir\u00e1s el resultado \u2014 l\u00e9elo o "
+                "res\u00famelo en voz alta con naturalidad, m\u00e1ximo 2-3 frases. Si no hay chat abierto, "
+                "la herramienta te lo dir\u00e1."
+            )
         )
-    instructions += _VOICE_POLICY
+    instructions += _voice_policy(language)
     if profile:
         name = _bot_display_name(profile)
         if "You are Hermes, speaking live" in instructions:
             instructions = instructions.replace("You are Hermes, speaking live", f"You are {name}, speaking live", 1)
         instructions += (
-            f"\n\nIDENTITY: You are {name}. If asked who you are, "
-            f"answer as {name} in that role — never say you are Hermes, a model, or a generic assistant."
+            (
+                f"\n\nIDENTITY: You are {name}. If asked who you are, "
+                f"answer as {name} in that role — never say you are Hermes, a model, or a generic assistant."
+            ) if language == "en" else (
+                f"\n\nIDENTIDAD: Eres {name}. Si te preguntan quién eres, "
+                f"responde como {name} con su rol — nunca digas que eres Hermes, un modelo, ni un asistente genérico."
+            )
         )
     auth = talk_auth.resolve_auth()
     descriptor = talk_wire.mint_ephemeral_session(
@@ -415,10 +442,10 @@ if router is not None:
                     orig = talk_config.get_hermes_home
                     talk_config.get_hermes_home = lambda: _profile_home(profile)
                     try:
-                        return _mint_for(profile, voice, allow_chat)
+                        return _mint_for(profile, voice, allow_chat, body.get("language"))
                     finally:
                         talk_config.get_hermes_home = orig
-                return _mint_for(None, voice, allow_chat)
+                return _mint_for(None, voice, allow_chat, body.get("language"))
 
         descriptor, auth = await asyncio.to_thread(_do)
         return {
@@ -596,21 +623,30 @@ if router is not None:
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
+        language = body.get("language")
         name = str(body.get("name") or "").strip()
         arguments = body.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
         if not name:
-            raise HTTPException(status_code=400, detail="name is required")
+            raise HTTPException(status_code=400, detail="name is required" if language == "en" else "name requerido")
         try:
             output = await asyncio.wait_for(
-                asyncio.to_thread(talk_tools.execute_talk_tool, name, arguments),
+                asyncio.to_thread(
+                    talk_tools.execute_talk_tool, name, arguments,
+                    **({"language": language} if getattr(talk_tools, "SUPPORTS_LANGUAGE", False) else {}),
+                ),
                 timeout=110,
             )
         except asyncio.TimeoutError:
             output = (
-                f"The tool {name} is still running; I will stop waiting here. "
-                "Ask me to check the result in a moment."
+                (
+                    f"The tool {name} is still running; I will stop waiting here. "
+                    "Ask me to check the result in a moment."
+                ) if language == "en" else (
+                    f"La herramienta {name} sigue corriendo; no espero más aquí. "
+                    "Pídeme revisar el resultado en un momento."
+                )
             )
         except talk_tools.TalkToolError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -764,7 +800,7 @@ def _cl_ensure() -> None:
                                "capabilities": {"experimentalApi": True}}, timeout=25)
 
 
-def _codexlive_persona(profile: str | None) -> str:
+def _codexlive_persona(profile: str | None, language: str = "es") -> str:
     if profile:
         sections = _bot_identity_sections(profile)
         name = _bot_display_name(profile)
@@ -774,29 +810,47 @@ def _codexlive_persona(profile: str | None) -> str:
     base = talk_identity.build_instructions(sections, tools=[], lane="dashboard")
     if profile and "You are Hermes, speaking live" in base:
         base = base.replace("You are Hermes, speaking live", f"You are {name}, speaking live", 1)
-    base += _language_directive()
+    base += _language_directive(language)
     base += (
-        f"\n\nVOICE: You are speaking with the user in a live voice session. Keep replies brief, natural, and to the point."
-        f" IDENTITY: You are {name}; if asked who you are, answer as {name} in that role — never as a generic assistant."
+        (
+            f"\n\nVOICE: You are speaking with the user in a live voice session. Keep replies brief, natural, and to the point."
+            f" IDENTITY: You are {name}; if asked who you are, answer as {name} in that role — never as a generic assistant."
+        ) if language == "en" else (
+            f"\n\nVOZ: hablas con el usuario en una sesión de voz en vivo. Respuestas breves, naturales y al grano."
+            f" IDENTIDAD: eres {name}; si te preguntan quién eres, responde como {name} con su rol — nunca como un asistente genérico."
+        )
     )
-    base += _VOICE_POLICY
+    base += _voice_policy(language)
     return base
 
 
-_AGENT_INSTR = (
-    "You are connected to a live voice session with the user. When the voice session delegates "
-    "a request to you, carry it out with your tools and reply concisely: your text will be read aloud."
-)
+_AGENT_INSTR = {
+    "es": (
+        'Estás conectado a una sesión de voz en vivo con el usuario. Cuando la sesión de voz te delegue una '
+        'petición, actúala con tus herramientas y responde conciso: tu texto se leerá en voz alta.'
+    ),
+    "en": (
+        'You are connected to a live voice session with the user. When the voice session delegates a request '
+        'to you, carry it out with your tools and reply concisely: your text will be read aloud.'
+    ),
+}
 
 # Modo cliente (default): el CLIENTE ejecuta lo que la voz pide (chat de Hermes del usuario).
 # El core igual rutea cada delegación a este thread como fallback fantasma — si el agente
 # hiciera trabajo aquí (tool calls, gpt-5.6-sol), quemaría el plan ChatGPT y duplicaría todo.
 # Esta instrucción lo neutraliza: responder 'skip' sin usar herramientas.
-_AGENT_INSTR_SKIP = (
-    "You are connected to a live voice session, but the CLIENT (the app) executes the "
-    "requests from that session. If you receive a <realtime_delegation> message, do NOT execute anything, do NOT use "
-    "tools, and do NOT read files: reply with only the word: skip"
-)
+_AGENT_INSTR_SKIP = {
+    "es": (
+        'Estás conectado a una sesión de voz en vivo, pero es el CLIENTE (la app) quien ejecuta las '
+        'peticiones de esa sesión. Si recibes un mensaje <realtime_delegation>, NO ejecutes nada, NO uses '
+        'herramientas y NO leas archivos: responde únicamente la palabra: skip'
+    ),
+    "en": (
+        'You are connected to a live voice session, but the CLIENT (the app) executes the requests from that '
+        'session. If you receive a <realtime_delegation> message, do NOT execute anything, do NOT use tools, '
+        'and do NOT read files: reply with only the word: skip'
+    ),
+}
 
 # Política de delegación para el MODELO DE VOZ (el que decide qué pasa al backend).
 # Sin esto delega cualquier cosa (saludos, fragmentos, "aló") y satura el chat con turnos largos.
@@ -808,6 +862,11 @@ _VOICE_POLICY = (
     "- While a task is running: say ONE brief line in the user's language ('sure, I will check') and WAIT silently; do not guess results, do not delegate again in the meantime; if the user speaks, tell them you are still on it.\n"
     "- When the result arrives, read the key facts back in one or two short sentences."
 )
+
+
+def _voice_policy(language: str = "es") -> str:
+    # The shared English policy is outside localization scope; localize its example.
+    return _VOICE_POLICY if language == "en" else _VOICE_POLICY.replace("sure, I will check", "dale, lo reviso")
 
 
 def _talk_settings() -> dict:
@@ -831,10 +890,11 @@ def _agent_model() -> str | None:
     return v or None
 
 
-def _cl_thread_ensure() -> str:
+def _cl_thread_ensure(language: str = "es") -> str:
+    language = "en" if language == "en" else "es"
     want = _agent_model()
     tid = _CL.get("thread_id")
-    if tid and _CL.get("thread_model") == want:
+    if tid and _CL.get("thread_model") == want and _CL.get("thread_language") == language:
         return tid
     body = {"cwd": str(Path.home()), "modelProvider": "openai"}
     if want:
@@ -845,13 +905,14 @@ def _cl_thread_ensure() -> str:
         raise RuntimeError("codex: no se pudo crear el thread")
     _CL["thread_id"] = tid
     _CL["thread_model"] = want
+    _CL["thread_language"] = language
     return tid
 
 
-def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
+def _codexlive_start(profile: str | None, voice: str, offer: str, language: str = "es") -> dict:
     _cl_ensure()
-    tid = _cl_thread_ensure()
-    persona = _codexlive_persona(profile)
+    tid = _cl_thread_ensure(language)
+    persona = _codexlive_persona(profile, language)
     client_managed = str(_talk_settings().get("delegation") or "client").strip().lower() != "server"
     params = {
         "threadId": tid,
@@ -860,7 +921,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str) -> dict:
         "version": "v3",
         "voice": voice or "cove",
         "prompt": persona,
-        "realtimeStartInstructions": _AGENT_INSTR if not client_managed else _AGENT_INSTR_SKIP,
+        "realtimeStartInstructions": (_AGENT_INSTR if not client_managed else _AGENT_INSTR_SKIP)["en" if language == "en" else "es"],
         # Gestión de tareas delegadas por voz: POR DEFECTO el CLIENTE (el desktop) las
         # ejecuta en el chat de Hermes del usuario — usa SU configuración/modelos/providers.
         # Solo si settings.json lleva {"delegation": "server"} se deja que el core las
@@ -966,7 +1027,7 @@ if router is not None:
 
         def _do():
             with _CL_LOCK:
-                return _codexlive_start(profile, voice, offer)
+                return _codexlive_start(profile, voice, offer, body.get("language"))
 
         try:
             result = await asyncio.to_thread(_do)

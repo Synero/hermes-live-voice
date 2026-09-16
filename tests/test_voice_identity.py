@@ -28,8 +28,8 @@ def test_minted_identity_does_not_invent_owner_or_host(profile, allow_chat):
             build_instructions=lambda sections, **kwargs: "You are Hermes, speaking live. " + sections["PERSONA"]
         ),
         talk_capabilities=SimpleNamespace(instruction_section=lambda: ""),
-        _language_directive=lambda: "",
-        _VOICE_POLICY="",
+        _language_directive=lambda language: "",
+        _voice_policy=lambda language: "",
         _bot_display_name=lambda _: "Example Bot",
         talk_auth=SimpleNamespace(resolve_auth=lambda: auth),
         talk_config=SimpleNamespace(talk_model=lambda: "test-model"),
@@ -43,7 +43,7 @@ def test_minted_identity_does_not_invent_owner_or_host(profile, allow_chat):
     assert sections["PERSONA"] in instructions
     if profile:
         assert "You are Example Bot, speaking live" in instructions
-        assert "IDENTITY: You are Example Bot." in instructions
+        assert "IDENTIDAD: Eres Example Bot." in instructions
     else:
         assert "You are Hermes, speaking live" in instructions
     assert captured["tools"] == ([{"name": "send_to_chat"}] if allow_chat else [])
