@@ -276,7 +276,14 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language
 
 _LOGIN_URL = "https://auth.openai.com/codex/device"
 _URL_RE = re.compile(r"https://auth\.openai\.com/codex/device")
-_CODE_RE = re.compile(r"\b([A-Z0-9]{4}-[A-Z0-9]{5})\b")
+# Device code is a hyphenated uppercase token (codex 0.145 prints e.g.
+# "IK34-27GA1"). codex wraps it in ANSI SGR colour codes with no surrounding
+# whitespace, so the escape's trailing "m" (a word char) sits right before the
+# code and defeats a leading \b word boundary — the old pattern silently never
+# matched, so the code was never exposed (the URL regex has no \b, which is
+# exactly why copying the sign-in link worked). Strip ANSI first, then match.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_CODE_RE = re.compile(r"\b([A-Z0-9]{4}-[A-Z0-9]{4,5})\b")
 _LOGIN_TIMEOUT_S = 16 * 60
 
 _LOGIN: dict = {
@@ -320,12 +327,13 @@ def _login_reader(proc) -> None:
     try:
         for line in iter(proc.stdout.readline, ""):
             _LOGIN["output"] = (_LOGIN["output"] + line)[-4000:]
+            clean = _ANSI_RE.sub("", line)
             if not _LOGIN["url"]:
-                m = _URL_RE.search(line)
+                m = _URL_RE.search(clean)
                 if m:
                     _LOGIN["url"] = m.group(0)
             if not _LOGIN["code"]:
-                m = _CODE_RE.search(line)
+                m = _CODE_RE.search(clean)
                 if m:
                     _LOGIN["code"] = m.group(1)
     except Exception:  # noqa: BLE001
