@@ -951,7 +951,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
                 # thread obsoleto: recrear y reintentar una vez
                 _CL["thread_id"] = None
                 _CL["thread_model"] = None
-                tid2 = _cl_thread_ensure()
+                tid2 = _cl_thread_ensure(language)
                 params["threadId"] = tid2
                 start = len(_CL["notifs"])
                 _cl_request("thread/realtime/start", params, timeout=25)
