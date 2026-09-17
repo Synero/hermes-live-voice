@@ -1596,7 +1596,9 @@ function ComposerLiveButton({ ctx }) {
               },
               children: jsx(TrIcon, { size: 13 })
             }) }),
-            jsx(PopoverContent, { side: 'top', align: 'end', sideOffset: 8, style: { width: 320 }, children: jsx(LivePanel, {}) })
+            jsx(PopoverContent, { side: 'top', align: 'end', sideOffset: 8, style: { width: 320 },
+              onFocusOutside: e => { try { e.preventDefault() } catch {} },
+              children: jsx(LivePanel, {}) })
           ]
         })
       }),
@@ -1627,6 +1629,7 @@ function ComposerLiveButton({ ctx }) {
             jsx(PopoverContent, {
               side: 'top', align: 'end', sideOffset: 8,
               style: { width: 300 },
+              onFocusOutside: e => { try { e.preventDefault() } catch {} },
               children: jsx(ConfigForm, { ctx })
             })
           ]
