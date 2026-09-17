@@ -62,3 +62,15 @@ def test_mute_guards_block_barge_in():
     assert "if (bus.muted) return" in _fn_body(src, "doBargeIn")
     assert "if (bus.muted) { _botSpeakingSince = 0; return }" in _fn_body(src, "maybeBarge")
     assert "const micLevel = bus.muted ? 0 :" in src
+
+
+def test_transcript_user_label_is_not_a_hardcoded_name():
+    """#9: the transcript must not label the user with the maintainer's name.
+
+    This plugin installs on other people's desktops, so a literal name in the UI
+    (or anywhere else in the shipped source) leaks the maintainer's identity into
+    every install — the user bubble belongs to whoever is talking, not to us.
+    """
+    src = _src()
+    assert "Nacho" not in src, "hardcoded owner name found in desktop/plugin.js"
+    assert re.search(r"children: isUser \? tr\('Tú', 'You'\)", src), "user label is not localized/owner-neutral"
