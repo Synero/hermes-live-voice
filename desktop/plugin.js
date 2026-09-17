@@ -1650,7 +1650,7 @@ function renderBubble(m, key) {
   return jsxs('div', {
     style: { display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' },
     children: [
-      jsx('div', { style: { fontSize: 10, fontWeight: 600, color: '#8e8e93', margin: isUser ? '0 7px 1px 0' : '0 0 1px 7px' }, children: isUser ? 'Nacho' : ((bus.botName || 'Bot') + ' (Bot)') }),
+      jsx('div', { style: { fontSize: 10, fontWeight: 600, color: '#8e8e93', margin: isUser ? '0 7px 1px 0' : '0 0 1px 7px' }, children: isUser ? tr('Tú', 'You') : ((bus.botName || 'Bot') + ' (Bot)') }),
       jsx('div', {
         style: {
           maxWidth: '84%', padding: '6px 11px', borderRadius: 15, fontSize: 12, lineHeight: 1.35,

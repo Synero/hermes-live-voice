@@ -231,3 +231,46 @@ def test_interrupt_route_does_not_block_event_loop():
     result, during = asyncio.run(run())
     assert result == {"ok": True}
     assert during >= 20, f"event loop was blocked during the interrupt ({during} ticks)"
+
+
+def test_codex_thread_recovery_keeps_session_language():
+    """#9: a stale thread recreated mid-call must be recreated in the session language.
+
+    `_cl_thread_ensure()` defaults to `es`, so calling it bare from the recovery path
+    re-registered an English session as Spanish: the next English call then saw a
+    language mismatch in `_CL` and paid for a brand-new thread (new context, new
+    plan work). The recovery must carry the language of the session that hit it.
+    """
+    ns = load_unit(PLUGIN_API, "_codexlive_start")
+    ns["_CL"] = {"proc": object(), "notifs": [], "seq": 0, "thread_id": "tid-1"}
+    ns["_log"] = type("LogStub", (), {"warning": lambda *a: None})()
+    ns["_cl_ensure"] = lambda: None
+
+    ensured: list[str] = []
+
+    def thread_ensure(language="es"):
+        ensured.append(language)
+        return "tid-1" if len(ensured) == 1 else "tid-2"
+
+    ns["_cl_thread_ensure"] = thread_ensure
+    ns["_codexlive_persona"] = lambda profile, language: "persona"
+    ns["_talk_settings"] = lambda: {"delegation": "client"}
+    ns["_AGENT_INSTR"] = {"es": "agent", "en": "agent"}
+    ns["_AGENT_INSTR_SKIP"] = {"es": "skip", "en": "skip"}
+
+    starts = {"n": 0}
+
+    def request(method, params, timeout=25):
+        if method == "thread/realtime/start":
+            starts["n"] += 1
+            if starts["n"] == 1:
+                raise RuntimeError("thread not found")
+            ns["_CL"]["notifs"].append({"method": "thread/realtime/sdp", "params": {"sdp": "v=0"}})
+        return {}
+
+    ns["_cl_request"] = request
+
+    result = ns["_codexlive_start"](None, "cove", "v=0", "en")
+    assert ensured == ["en", "en"], f"recovery lost the session language: {ensured}"
+    assert result["threadId"] == "tid-2"
+    assert result["answer"] == "v=0"

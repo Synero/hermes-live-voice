@@ -77,7 +77,7 @@ def _list_bots() -> list[str]:
 
 def _profile_home(profile: str) -> Path | None:
     # Nombre de perfil simple (sin traversal). Los perfiles pueden ser symlinks
-    # (p.ej. ticketin → ~/.hermes-ticketin), así que NO se exige que el path
+    # (p.ej. mi-bot → ~/.hermes-mi-bot), así que NO se exige que el path
     # resuelto quede bajo profiles/ — solo que el nombre sea seguro y exista.
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", profile or ""):
         return None
@@ -90,8 +90,8 @@ def _profile_home(profile: str) -> Path | None:
 def _bot_display_name(profile: str) -> str:
     """Nombre del bot desde el encabezado del SOUL.md; fallback al slug.
 
-    Formatos vistos: "# SOUL.md — Ticketin 🎟️", "# Pavi — CEO de Pavilion",
-    "# Pix — CEO de RetroPixel", "# Bestia", "# RONDA DevOps".
+    Formatos vistos: "# SOUL.md — MiBot", "# Asistente — CEO de Acme", "# Ops",
+    "# MiProyecto DevOps".
     """
     home = _profile_home(profile)
     if home is not None:
@@ -951,7 +951,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
                 # thread obsoleto: recrear y reintentar una vez
                 _CL["thread_id"] = None
                 _CL["thread_model"] = None
-                tid2 = _cl_thread_ensure()
+                tid2 = _cl_thread_ensure(language)
                 params["threadId"] = tid2
                 start = len(_CL["notifs"])
                 _cl_request("thread/realtime/start", params, timeout=25)
