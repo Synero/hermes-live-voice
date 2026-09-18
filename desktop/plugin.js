@@ -260,6 +260,78 @@ function _delegRespond(dc, itemId, text) {
   } catch {}
 }
 
+// Gate de decisión Jev (TypeSafe System One) en el backend: clasifica la frase
+// antes de delegar (charla / tarea de chat / computer use / pedir aclaración).
+// Fail-open: sin key, con timeout o con respuesta inusable se sigue con la
+// heurística local de siempre (_isJunkDelegation).
+const GATE_TIMEOUT_MS = 900
+
+function _recentForGate() {
+  try {
+    return transcript.slice(-4).map(t => ({role: t.role === 'user' ? 'user' : 'bot', text: String(t.text || '').slice(0, 100)}))
+  } catch { return [] }
+}
+
+async function _gateDecide(ctx, req) {
+  try {
+    const r = await ctx.rest('/tool', {
+      method: 'POST',
+      body: {
+        language: EN ? 'en' : 'es',
+        name: 'decide_voice_delegation',
+        arguments: { text: req, recent_transcript: _recentForGate(), work_in_chat: (ctx.storage.get(KEY_CHAT) || '1') !== '0' },
+      },
+      timeoutMs: GATE_TIMEOUT_MS,
+    })
+    const out = String((r && r.output) || '')
+    if (!out) return null
+    const parsed = JSON.parse(out)
+    if (!parsed || !parsed.enabled || !parsed.decision) return null
+    return parsed.decision
+  } catch { return null }
+}
+
+// Contexto que ve el agente cuando el gate marcó una acción sobre la GUI.
+function _delegPreamble(dec) {
+  if (!dec || dec.route !== 'computer_use') return ''
+  return dec.needs_confirm
+    ? tr('[El gate de decisión clasificó esto como una ACCIÓN SOBRE LA GUI del usuario (computer use). Antes de tocar nada, confírmale en una frase qué va a cambiar; si ya lo pidió explícito, procede.] ', '[The decision gate classified this as a GUI ACTION (computer use). Before touching anything, confirm in one sentence what will change; if the user already asked explicitly, go ahead.] ')
+    : tr('[El gate de decisión clasificó esto como una ACCIÓN SOBRE LA GUI del usuario (computer use).] ', '[The decision gate classified this as a GUI ACTION (computer use).] ')
+}
+
+// Ruta que decidió el gate; sin veredicto manda la heurística de palabras.
+function _routeDelegation(ctx, dc, itemId, req, dec) {
+  const route = String((dec && dec.route) || '')
+  if (route === 'answer_self') {
+    pushTranscript('tool', tr('charla (gate Jev) — la voz responde sola', 'small talk (Jev gate) — voice answers itself'))
+    _delegRespond(dc, itemId, tr('El usuario solo estaba conversando, no pidiendo trabajo. Responde tú breve y natural; si te estaba preguntando por algo en curso, dile que sigues en eso. No hay nada que ejecutar.', 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.'))
+    return
+  }
+  if (route === 'clarify') {
+    pushTranscript('tool', tr('el gate pide aclaración', 'gate asks to clarify'))
+    _delegRespond(dc, itemId, tr('Lo que dijo no alcanza para saber qué ejecutar. Pídele en UNA frase muy breve que aclare qué quiere que hagas; no ejecutes nada todavía.', 'What they said is not enough to know what to run. Ask them in ONE very short sentence to clarify what they want you to do; do not run anything yet.'))
+    return
+  }
+  if (!route && _isJunkDelegation(req)) {
+    pushTranscript('tool', tr('charla (no es tarea) — la voz responde sola', 'small talk (not a task) — voice answers itself'))
+    _delegRespond(dc, itemId, tr('El usuario solo estaba conversando, no pidiendo trabajo. Responde tú breve y natural; si te estaba preguntando por algo en curso, dile que sigues en eso. No hay nada que ejecutar.', 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.'))
+    return
+  }
+  const chatWork = (ctx.storage.get(KEY_CHAT) || '1') !== '0'
+  if (!chatWork) {
+    pushTranscript('sys', tr('Tareas desactivadas: activa "Trabajar en el chat".', 'Tasks are off: enable "Work in the chat".'))
+    _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
+    return
+  }
+  if (_delegBusy) {
+    _delegQueue = { req, itemId, at: Date.now(), dec }
+    pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
+    _delegRespond(dc, itemId, tr('Ya hay una tarea en curso. Dile al usuario que sigues trabajando en eso; si lo que dijo es una corrección, se verá reflejada en el resultado, y si es algo nuevo, espera a que termine lo actual.', 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.'))
+    return
+  }
+  _runDelegation(ctx, dc, itemId, req, dec)
+}
+
 function handleDelegation(ctx, msg, dc) {
   const item = (msg && msg.item) || {}
   const itemId = String(item.id || '')
@@ -278,31 +350,16 @@ function handleDelegation(ctx, msg, dc) {
     pushTranscript('sys', tr('El agente del servidor la está resolviendo; te leeré el resultado cuando esté.', 'The server agent is on it; I will read the result when ready.'))
     return
   }
-  if (_isJunkDelegation(req)) {
-    pushTranscript('tool', tr('charla (no es tarea) — la voz responde sola', 'small talk (not a task) — voice answers itself'))
-    _delegRespond(dc, itemId, tr('El usuario solo estaba conversando, no pidiendo trabajo. Responde tú breve y natural; si te estaba preguntando por algo en curso, dile que sigues en eso. No hay nada que ejecutar.', 'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.'))
-    return
-  }
-  const chatWork = (ctx.storage.get(KEY_CHAT) || '1') !== '0'
-  if (!chatWork) {
-    pushTranscript('sys', tr('Tareas desactivadas: activa "Trabajar en el chat".', 'Tasks are off: enable "Work in the chat".'))
-    _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
-    return
-  }
-  if (_delegBusy) {
-    _delegQueue = { req, itemId, at: Date.now() }
-    pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
-    _delegRespond(dc, itemId, tr('Ya hay una tarea en curso. Dile al usuario que sigues trabajando en eso; si lo que dijo es una corrección, se verá reflejada en el resultado, y si es algo nuevo, espera a que termine lo actual.', 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.'))
-    return
-  }
-  _runDelegation(ctx, dc, itemId, req)
+  _gateDecide(ctx, req)
+    .then(dec => _routeDelegation(ctx, dc, itemId, req, dec))
+    .catch(() => _routeDelegation(ctx, dc, itemId, req, null))
 }
 
-function _runDelegation(ctx, dc, itemId, req) {
+function _runDelegation(ctx, dc, itemId, req, dec) {
   _delegBusy = true
   ;(async () => {
     let out = ''
-    try { out = await delegateToChat(req) } catch (e) { out = '' }
+    try { out = await delegateToChat(_delegPreamble(dec) + req) } catch (e) { out = '' }
     out = String(out || '').trim()
     if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
     const forVoice = _plainForVoice(out)
@@ -314,7 +371,7 @@ function _runDelegation(ctx, dc, itemId, req) {
     _delegQueue = null
     if (q && Date.now() - q.at < 600000) {
       pushTranscript('tool', tr('retomando en cola: ', 'resuming queued: ') + q.req.slice(0, 100))
-      _runDelegation(ctx, dc, q.itemId, q.req)
+      _runDelegation(ctx, dc, q.itemId, q.req, q.dec)
     } else if (q) {
       pushTranscript('sys', tr('La tarea en cola quedó obsoleta y no se ejecutó.', 'Queued task went stale and was not run.'))
       _delegRespond(dc, q.itemId, tr('La tarea en cola quedó obsoleta y no se ejecutó. Dile al usuario que si todavía la quiere, la repita y la ejecutas al tiro.', 'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.'))

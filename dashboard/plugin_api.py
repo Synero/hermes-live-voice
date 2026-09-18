@@ -40,10 +40,11 @@ _TALK_VENDOR_ROOT = _PLUGIN_ROOT / "dashboard" / "talk_vendor"
 _HERMES_TALK_ROOT = Path.home() / ".hermes" / "plugins" / "hermes-talk"
 # Orden de precedencia (el último insertado gana): el plugin hermes-talk completo
 # si está instalado; si no, el bundle vendorizado que viaja en el repo.
-for _p in (str(_PLUGIN_ROOT), str(_TALK_VENDOR_ROOT), str(_HERMES_TALK_ROOT)):
+for _p in (str(_PLUGIN_ROOT), str(_PLUGIN_ROOT / "dashboard"), str(_TALK_VENDOR_ROOT), str(_HERMES_TALK_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import jev_gate  # noqa: E402
 import talk_auth  # noqa: E402
 import talk_capabilities  # noqa: E402
 import talk_config  # noqa: E402
@@ -211,11 +212,87 @@ def _send_to_chat_tool() -> dict:
     }
 
 
+_DECIDE_TOOL_NAME = "decide_voice_delegation"
+
+_DECIDE_GATE_DESC = (
+    "Classify one spoken utterance before delegating it: is it real work, where should it run "
+    "(the user's chat, the graphical desktop, or nowhere) and does it need a confirmation. "
+    "Backed by the Jev decision gate (TypeSafe System One). Returns compact JSON with the gate's "
+    "own verdict; when the gate is not configured on this install it answers {\"enabled\": false} "
+    "and the caller keeps its local heuristic."
+)
+
+
+def _decide_voice_delegation_tool() -> dict:
+    return {
+        "type": "function",
+        "name": _DECIDE_TOOL_NAME,
+        "description": _DECIDE_GATE_DESC,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "The utterance to classify, verbatim in the user's language.",
+                },
+                "recent": {
+                    "type": "string",
+                    "description": "Optional short tail of the conversation (last turns) for context.",
+                },
+            },
+            "required": ["request"],
+        },
+    }
+
+
+async def _voice_gate_route(name: str, arguments: dict, language: str | None) -> dict | None:
+    """El gate de decisión de voz, o ``None`` cuando no aplica.
+
+    Punto de entrada único para que la ruta ``/tool`` no sepa nada del gate: si
+    el nombre no es el suyo, o el gate está apagado en esta instalación,
+    devuelve ``None`` y la ruta sigue con su dispatch normal.
+    """
+    if name != _DECIDE_TOOL_NAME or not jev_gate.env_key():
+        return None
+    return await _decide_voice_delegation(arguments, language)
+
+
+async def _decide_voice_delegation(arguments: dict, language: str | None) -> dict:
+    """Una decisión del gate, como texto JSON.
+
+    ``enabled`` le dice al desktop si el gate existe en esta instalación, para
+    que una caja sin key reciba ``{"enabled": false, "decision": null}`` en vez
+    de un veredicto inventado. El veredicto lo parsea y valida :mod:`jev_gate`;
+    cualquier cosa inusable llega como ``null`` y el desktop se queda con su
+    heurística.
+    """
+    lang = "en" if language == "en" else "es"
+    if not jev_gate.env_key():
+        # Sin gate no hay nada que decidir: el desktop sigue con su heurística.
+        return {"ok": True, "output": json.dumps({"enabled": False, "decision": None}, ensure_ascii=False)}
+    try:
+        raw = await asyncio.to_thread(jev_gate.decide, arguments if isinstance(arguments, dict) else {}, lang)
+    except Exception:  # noqa: BLE001 — fail-open: la voz nunca se cae por el gate
+        raw = None
+    decision = None
+    if isinstance(raw, dict) and raw.get("decided"):
+        # Normalizado para el desktop: ruta cerrada + booleans, no probabilidades.
+        decision = {
+            "route": str(raw.get("route") or ""),
+            "needs_confirm": float(raw.get("needs_confirm") or 0.0) >= 0.5,
+            "confidence": float(raw.get("confidence") or 0.0),
+        }
+    payload = {"enabled": True, "decision": decision}
+    return {"ok": True, "output": json.dumps(payload, ensure_ascii=False)}
+
+
 def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language: str = "es"):
     """Mint con identity del bot (o del host si no se pide profile)."""
     tools = talk_tools.default_talk_tools()
     if allow_chat:
         tools = tools + [_send_to_chat_tool()]
+        if jev_gate.env_key():
+            tools = tools + [_decide_voice_delegation_tool()]
     if profile:
         sections = _bot_identity_sections(profile)
     else:
@@ -638,6 +715,9 @@ if router is not None:
             arguments = {}
         if not name:
             raise HTTPException(status_code=400, detail="name is required" if language == "en" else "name requerido")
+        gate = await _voice_gate_route(name, arguments, language)
+        if gate is not None:
+            return gate
         try:
             output = await asyncio.wait_for(
                 asyncio.to_thread(

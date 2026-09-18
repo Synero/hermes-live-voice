@@ -74,3 +74,27 @@ def test_transcript_user_label_is_not_a_hardcoded_name():
     src = _src()
     assert "Nacho" not in src, "hardcoded owner name found in desktop/plugin.js"
     assert re.search(r"children: isUser \? tr\('Tú', 'You'\)", src), "user label is not localized/owner-neutral"
+
+
+def test_voice_gate_call_is_bounded_and_keeps_the_heuristic():
+    """The Jev gate is an upgrade, never a dependency.
+
+    The desktop half asks the backend for a verdict under a hard timeout and
+    still falls back to `_isJunkDelegation` when there is none, so a gate that
+    is unconfigured, slow or wrong degrades to the behaviour that shipped
+    before it existed.
+    """
+    src = _src()
+    calls = [c for c in _rest_calls(src) if "decide_voice_delegation" in c]
+    assert len(calls) == 1, calls
+    assert "timeoutMs" in calls[0], calls[0]
+    assert re.search(r"if \(!route && _isJunkDelegation\(req\)\)", src), "heuristic fallback missing"
+    assert re.search(r"_gateDecide\(ctx, req\)\s*\n\s*\.then\(", src), "gate call is not fire-and-fallback"
+    assert re.search(r"\.catch\(\(\) => _routeDelegation\(ctx, dc, itemId, req, null\)\)", src)
+
+
+def test_gate_carries_no_credential_in_the_desktop_half():
+    """The key lives in the backend; the shipped desktop file never holds one."""
+    src = _src()
+    for needle in ("TYPESAFE", "JEV_API_KEY", "api_key"):
+        assert needle not in src, f"{needle!r} found in desktop/plugin.js"

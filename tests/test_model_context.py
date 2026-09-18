@@ -24,6 +24,7 @@ def test_tool_adapter_signature_compatibility(localized, language):
         calls.append((name, arguments, language))
         return 'Original tool output'
 
+    ns['_voice_gate_route'] = _no_voice_gate
     ns['talk_tools'] = SimpleNamespace(
         execute_talk_tool=localized_tool if localized else legacy,
         TalkToolError=ValueError,
@@ -56,6 +57,11 @@ def vendor_module(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+async def _no_voice_gate(*_args, **_kwargs):
+    """Gate apagado: la ruta /tool sigue con su dispatch normal."""
+    return None
 
 
 @pytest.mark.parametrize('language', ['es', 'en'])
@@ -98,6 +104,7 @@ def test_constructed_voice_prompts(profile, allow_chat, language):
         talk_auth=SimpleNamespace(resolve_auth=lambda: SimpleNamespace(token='stub')),
         talk_config=SimpleNamespace(talk_model=lambda: 'stub'),
         talk_wire=SimpleNamespace(mint_ephemeral_session=lambda **kw: captured.update(kw)),
+        jev_gate=SimpleNamespace(env_key=lambda: ""),
     )
     directive = load_unit(PLUGIN_API, '_language_directive')
     directive.update(ns)
@@ -159,6 +166,7 @@ def test_tool_timeout_and_dynamic_output(language):
     ns['asyncio'] = SimpleNamespace(wait_for=wait_for, to_thread=lambda *args: None,
                                     TimeoutError=asyncio.TimeoutError)
     ns['talk_tools'] = SimpleNamespace(execute_talk_tool=lambda *args: None, TalkToolError=ValueError)
+    ns['_voice_gate_route'] = _no_voice_gate
 
     class Request:
         async def json(self):
@@ -233,11 +241,14 @@ DELEGATION
   assert.equal(messages.at(-2).item.output, completion);
   const msg = text => ({item: {id: 'item', content: [{text}]}});
   handleDelegation(ctx, msg('hola, ¿me escuchas?'), dc);
+  await flush();
   assert.match(lastText(), (EN ? /^The user was just chatting/ : /^El usuario solo estaba conversando/));
   handleDelegation({storage: {get: () => '0'}}, msg('revisa mi archivo'), dc);
+  await flush();
   assert.match(lastText(), (EN ? /^I cannot run that/ : /^No puedo ejecutar tareas/));
   _delegBusy = true;
   handleDelegation(ctx, msg('revisa mi archivo'), dc);
+  await flush();
   assert.match(lastText(), (EN ? /^A task is already in progress/ : /^Ya hay una tarea en curso/));
   _delegQueue.at = now - 600001;
   _delegBusy = false;
@@ -328,7 +339,7 @@ def test_tool_route_localizes_unavailable_error(language):
     class HTTPException(Exception):
         def __init__(self, status_code, detail):
             self.detail = detail
-    ns.update(talk_tools=vendor_module('talk_tools'), HTTPException=HTTPException)
+    ns.update(talk_tools=vendor_module('talk_tools'), HTTPException=HTTPException, _voice_gate_route=_no_voice_gate)
     class Request:
         async def json(self):
             return {'name': 'probe', 'language': language}

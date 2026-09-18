@@ -34,6 +34,7 @@ def test_minted_identity_does_not_invent_owner_or_host(profile, allow_chat):
         talk_auth=SimpleNamespace(resolve_auth=lambda: auth),
         talk_config=SimpleNamespace(talk_model=lambda: "test-model"),
         talk_wire=SimpleNamespace(mint_ephemeral_session=mint),
+        jev_gate=SimpleNamespace(env_key=lambda: ""),
     )
 
     assert ns["_mint_for"](profile, "marin", allow_chat) == (descriptor, auth)

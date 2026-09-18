@@ -98,6 +98,23 @@ The desktop app discovers the desktop half from the plugin folder
 |---|---|---|---|
 | `codexAgentModel` | a ChatGPT-valid Codex model slug (e.g. `gpt-5.6-sol`) | *(unset)* | Model forced for the delegated **server agent** thread. Needed only when the machine's default Codex model is not ChatGPT-valid (e.g. a custom provider proxy). |
 | `delegation` | `client` · `server` | `client` | Who runs voice-delegated tasks. **`client`** = the tasks run in your focused Hermes chat (your config/providers — recommended, nothing is sent to the ChatGPT lane). **`server`** = tasks run in a Codex agent thread on the backend (advanced/opt-in). |
+| `jevGate` | `true` · `false` | *(auto)* | Master switch for the **Jev decision gate** (see below). Unset means "on whenever the backend has a key". |
+
+### Decision gate (Jev)
+
+Every delegated utterance is classified before it runs — real work or small talk, your chat or the
+graphical desktop, and whether the action deserves a confirmation — by the
+[TypeSafe System One](https://typesafe.ai) endpoint instead of by keyword matching.
+
+- **Turn it on:** set `TYPESAFE_API_KEY` in the backend service environment (optional:
+  `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`, `TYPESAFE_TIMEOUT_S`, `JEV_GATE=0` to force it off).
+  No key → the gate is off.
+- **Fail-open:** it gets a hard per-call budget (default 600 ms) and *any* timeout, error or
+  unusable answer means the desktop keeps its local heuristic. A broken gate behaves exactly like
+  no gate; it can never block or delay a task beyond that budget.
+- **Closed vocabulary:** the gate picks from four named routes (`chat_task`, `computer_use`,
+  `answer_self`, `clarify`). It never writes instructions, tool calls or code, and the key stays in
+  the backend — the desktop half never sees a credential.
 
 ## Troubleshooting
 
