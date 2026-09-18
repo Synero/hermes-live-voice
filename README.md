@@ -7,6 +7,28 @@ bots from Hermes Desktop with real-time audio, live transcript, voice tool calls
 through the local **Codex app-server**, running on a **ChatGPT/Codex subscription** — no API key needed
 for the voice lane.
 
+[![CI](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.2.2-informational)](plugin.yaml)
+[![Status: preview](https://img.shields.io/badge/status-preview-orange)](#status--roadmap)
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Install](#install)
+- [First run](#first-run)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [Status & roadmap](#status--roadmap)
+- [Changelog](#changelog)
+- [Tests](#tests)
+- [Credits](#credits)
+- [License](#license)
+
 ---
 
 ## Features
@@ -30,7 +52,18 @@ The plugin ships as a **unified package**: a backend half (`dashboard/plugin_api
 Hermes dashboard under `/api/plugins/talk-desktop/`) and a desktop half (`desktop/plugin.js`, loaded by
 the Hermes Desktop app).
 
-### Same-machine setup
+### From the Hermes plugin catalog
+
+```bash
+hermes plugins install hermes-live-voice   # curated catalog · tier: community
+hermes plugins enable talk-desktop
+```
+
+The catalog entry pins a released revision of this repo (updates: `hermes plugins update
+hermes-live-voice`). It lands in `$HERMES_HOME/plugins/talk-desktop` — the folder name the desktop
+app expects — so the desktop half is picked up on the next app start.
+
+### Same-machine setup (manual)
 
 ```bash
 # 1) Drop the repo into your Hermes plugins directory:
@@ -50,11 +83,29 @@ The desktop app discovers the desktop half from the plugin folder
    (`talk-desktop`), and `plugin.js` must sit at the folder root.
 3. In the app: `Ctrl/Cmd+K` → **“Reload desktop plugins”**.
 
-## Troubleshooting — first run
+## First run
+
+1. The mic button appears in the composer (next to the `+` row). Click to start a call.
+2. Open the gear ⚙ for settings: **Bot → Voice engine → Voice → Audio**.
+3. If this is a fresh machine: sign in to Codex first (`codex login`) or use the in-panel session flow.
+
+## Configuration
+
+`settings.json` is stored next to the installed backend plugin
+(`$HERMES_HOME/plugins/talk-desktop/settings.json`). See `settings.example.json`:
+
+| key | values | default | meaning |
+|---|---|---|---|
+| `codexAgentModel` | a ChatGPT-valid Codex model slug (e.g. `gpt-5.6-sol`) | *(unset)* | Model forced for the delegated **server agent** thread. Needed only when the machine's default Codex model is not ChatGPT-valid (e.g. a custom provider proxy). |
+| `delegation` | `client` · `server` | `client` | Who runs voice-delegated tasks. **`client`** = the tasks run in your focused Hermes chat (your config/providers — recommended, nothing is sent to the ChatGPT lane). **`server`** = tasks run in a Codex agent thread on the backend (advanced/opt-in). |
+
+## Troubleshooting
+
+First-run gotchas:
 
 - **No sign-in prompt?** The voice session needs a ChatGPT-plan Codex login. Open the mic
   config (gear while the plugin is visible) → the auth card shows your sign-in state and a
-  **Iniciar sesión** button: it opens `auth.openai.com/codex/device` with a code to type.
+  **Sign in** button: it opens `auth.openai.com/codex/device` with a code to type.
   Nothing to copy by hand from a terminal.
 - **`codex` not found in the dashboard logs?** The backend resolves `codex` from
   `~/.local/bin`, `$PATH` and `/usr/local/bin`. If your service runs with a minimal
@@ -62,28 +113,35 @@ The desktop app discovers the desktop half from the plugin folder
 - **Persona too generic?** The voice reads the focused bot's `SOUL.md`. No bot focused →
   it uses your Hermes default identity.
 
-## First run
-
-1. The mic button appears in the composer (next to the `+` row). Click to start a call.
-2. Open the gear ⚙ for settings: **Bot → Voice engine → Voice → Audio**.
-3. If this is a fresh machine: sign in to Codex first (`codex login`) or use the in-panel session flow.
-
-### Configuration — `settings.json`
-
-Stored next to the installed backend plugin (`$HERMES_HOME/plugins/talk-desktop/settings.json`).
-See `settings.example.json`:
-
-| key | values | default | meaning |
-|---|---|---|---|
-| `codexAgentModel` | a ChatGPT-valid Codex model slug (e.g. `gpt-5.6-sol`) | *(unset)* | Model forced for the delegated **server agent** thread. Needed only when the machine's default Codex model is not ChatGPT-valid (e.g. a custom provider proxy). |
-| `delegation` | `client` · `server` | `client` | Who runs voice-delegated tasks. **`client`** = the tasks run in your focused Hermes chat (your config/providers — recommended, nothing is sent to the ChatGPT lane). **`server`** = tasks run in a Codex agent thread on the backend (advanced/opt-in). |
-
 ## How it works
 
 The desktop renderer negotiates a WebRTC session against the ChatGPT backend; a local broker spawns
 `codex app-server` and drives the realtime conversation (protocol `v3`, model `gpt-live-1-codex`).
 Voice-delegated tasks surface as `delegation` items; the client (by default) routes them to your
 focused Hermes chat and feeds the result back to the voice model to speak.
+
+```text
+┌─ Hermes Desktop ────────────────────────────────────────────────────────────┐
+│  mic button in the composer  ·  Live Voice panel: transcript, controls, usage  │
+└────────────────────────────────────────────────────────────────────────────┘
+                │  WebRTC audio — the device talks to the model directly;
+                │  the broker only sets the session up.
+                v
+┌─ ChatGPT realtime backend ──────────────────────────────────────────────────┐
+│  GPT-Live-1 (gpt-live-1-codex)  ·  realtime protocol v3                      │
+└────────────────────────────────────────────────────────────────────────────┘
+                │  spawn + drive over stdio JSON-RPC
+                v
+┌─ dashboard half — /api/plugins/talk-desktop/ ───────────────────────────────┐
+│  broker: codex app-server on your ChatGPT/Codex subscription                 │
+└────────────────────────────────────────────────────────────────────────────┘
+                │  delegation item (client mode, default)
+                v
+┌─ your focused Hermes chat ──────────────────────────────────────────────────┐
+│  runs the task with YOUR models and providers, then the result               │
+│  is fed back and spoken by the voice model                                   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
 
 Full engineering recipe, protocol tables and gotchas:
 **[`docs/live-voice-recipe.md`](docs/live-voice-recipe.md)**.
