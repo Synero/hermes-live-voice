@@ -104,7 +104,7 @@ def test_constructed_voice_prompts(profile, allow_chat, language):
         talk_auth=SimpleNamespace(resolve_auth=lambda: SimpleNamespace(token='stub')),
         talk_config=SimpleNamespace(talk_model=lambda: 'stub'),
         talk_wire=SimpleNamespace(mint_ephemeral_session=lambda **kw: captured.update(kw)),
-        jev_gate=SimpleNamespace(env_key=lambda: ""),
+        _voice_gate_on=lambda: False,
     )
     directive = load_unit(PLUGIN_API, '_language_directive')
     directive.update(ns)

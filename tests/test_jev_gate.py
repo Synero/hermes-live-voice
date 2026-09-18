@@ -108,6 +108,23 @@ class StubGate:
         return self._decided
 
 
+def _endpoint_ns(gate, settings=None):
+    """Namespace mínimo para levantar el endpoint del backend por AST.
+
+    Trae el gate falso, el ``settings.json`` falso y la versión real de
+    ``_voice_gate_on``, para que el apagado se pruebe de verdad y no con un stub.
+    """
+    ns = {
+        "asyncio": asyncio,
+        "json": json,
+        "jev_gate": gate,
+        "_talk_settings": lambda: dict(settings or {}),
+        "_DECIDE_TOOL_NAME": "decide_voice_delegation",
+    }
+    ns["_voice_gate_on"] = _load_unit("_voice_gate_on", ns)
+    return ns
+
+
 # ── configuración: la key decide si el gate existe ──────────────────────────
 
 
@@ -393,7 +410,7 @@ def test_build_request_rejects_an_incomplete_question_map():
 
 def test_endpoint_reports_the_gate_off_so_the_desktop_keeps_its_heuristic():
     gate = StubGate(key="")
-    fn = _load_unit("_decide_voice_delegation", {"asyncio": asyncio, "json": json, "jev_gate": gate})
+    fn = _load_unit("_decide_voice_delegation", _endpoint_ns(gate))
     out = asyncio.run(fn({"text": "hola"}, "es"))
     assert out["ok"] is True
     assert json.loads(out["output"]) == {"enabled": False, "decision": None}
@@ -402,7 +419,7 @@ def test_endpoint_reports_the_gate_off_so_the_desktop_keeps_its_heuristic():
 
 def test_endpoint_normalizes_the_verdict_for_the_desktop():
     gate = StubGate(key=KEY, decided={"decided": True, "route": "computer_use", "needs_confirm": 0.9, "confidence": 0.8})
-    fn = _load_unit("_decide_voice_delegation", {"asyncio": asyncio, "json": json, "jev_gate": gate})
+    fn = _load_unit("_decide_voice_delegation", _endpoint_ns(gate))
     payload = json.loads(asyncio.run(fn({"text": "borra eso"}, "es"))["output"])
     assert payload["enabled"] is True
     assert payload["decision"] == {"route": "computer_use", "needs_confirm": True, "confidence": pytest.approx(0.8)}
@@ -411,7 +428,7 @@ def test_endpoint_normalizes_the_verdict_for_the_desktop():
 
 def test_endpoint_returns_null_on_an_undecided_verdict():
     gate = StubGate(key=KEY, decided={"decided": False, "reason": "transport:URLError"})
-    fn = _load_unit("_decide_voice_delegation", {"asyncio": asyncio, "json": json, "jev_gate": gate})
+    fn = _load_unit("_decide_voice_delegation", _endpoint_ns(gate))
     assert json.loads(asyncio.run(fn({"text": "x"}, "es"))["output"])["decision"] is None
 
 
@@ -420,21 +437,32 @@ def test_endpoint_survives_a_gate_that_raises():
         def decide(self, arguments, language="es", *, transport=None):
             raise RuntimeError("el gate se cayó")
 
-    fn = _load_unit("_decide_voice_delegation", {"asyncio": asyncio, "json": json, "jev_gate": Exploding(key=KEY)})
+    fn = _load_unit("_decide_voice_delegation", _endpoint_ns(Exploding(key=KEY)))
     payload = json.loads(asyncio.run(fn({"text": "x"}, "es"))["output"])
     assert payload == {"enabled": True, "decision": None}
 
 
 def test_endpoint_treats_any_other_language_as_spanish():
     gate = StubGate(key=KEY, decided={"decided": False})
-    fn = _load_unit("_decide_voice_delegation", {"asyncio": asyncio, "json": json, "jev_gate": gate})
+    fn = _load_unit("_decide_voice_delegation", _endpoint_ns(gate))
     asyncio.run(fn({"text": "x"}, "pt"))
     assert gate.calls[0][1] == "es"
 
 
+def test_settings_can_force_the_gate_off_even_with_a_key():
+    """`jevGate: false` en settings.json es el apagado explícito del operador."""
+    keyed = StubGate(key=KEY)
+    assert _load_unit("_voice_gate_on", {"jev_gate": keyed, "_talk_settings": lambda: {}})() is True
+    off = _load_unit("_voice_gate_on", {"jev_gate": keyed, "_talk_settings": lambda: {"jevGate": False}})
+    assert off() is False
+    # Solo el false booleano apaga: cualquier otro valor deja el gate encendido.
+    raro = _load_unit("_voice_gate_on", {"jev_gate": keyed, "_talk_settings": lambda: {"jevGate": "false"}})
+    assert raro() is True
+
+
 def test_route_entry_point_is_silent_when_the_gate_is_off():
     gate = StubGate(key="")
-    ns = {"asyncio": asyncio, "json": json, "jev_gate": gate, "_DECIDE_TOOL_NAME": "decide_voice_delegation"}
+    ns = _endpoint_ns(gate)
     fn = _load_unit("_voice_gate_route", ns)
     assert asyncio.run(fn("decide_voice_delegation", {"text": "hola"}, "es")) is None
     assert gate.calls == []
@@ -442,7 +470,7 @@ def test_route_entry_point_is_silent_when_the_gate_is_off():
 
 def test_route_entry_point_ignores_every_other_tool_name():
     gate = StubGate(key=KEY)
-    ns = {"asyncio": asyncio, "json": json, "jev_gate": gate, "_DECIDE_TOOL_NAME": "decide_voice_delegation"}
+    ns = _endpoint_ns(gate)
     fn = _load_unit("_voice_gate_route", ns)
     assert asyncio.run(fn("send_to_chat", {"text": "hola"}, "es")) is None
     assert gate.calls == []
@@ -450,7 +478,7 @@ def test_route_entry_point_ignores_every_other_tool_name():
 
 def test_route_entry_point_answers_when_the_gate_is_on():
     gate = StubGate(key=KEY, decided={"decided": True, "route": "clarify", "needs_confirm": 0.1, "confidence": 0.7})
-    ns = {"asyncio": asyncio, "json": json, "jev_gate": gate, "_DECIDE_TOOL_NAME": "decide_voice_delegation"}
+    ns = _endpoint_ns(gate)
     ns["_decide_voice_delegation"] = _load_unit("_decide_voice_delegation", ns)
     fn = _load_unit("_voice_gate_route", ns)
     out = asyncio.run(fn("decide_voice_delegation", {"text": "hazlo"}, "es"))

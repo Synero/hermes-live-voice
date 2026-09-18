@@ -107,8 +107,8 @@ graphical desktop, and whether the action deserves a confirmation — by the
 [TypeSafe System One](https://typesafe.ai) endpoint instead of by keyword matching.
 
 - **Turn it on:** set `TYPESAFE_API_KEY` in the backend service environment (optional:
-  `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`, `TYPESAFE_TIMEOUT_S`, `JEV_GATE=0` to force it off).
-  No key → the gate is off.
+  `TYPESAFE_BASE_URL`, `TYPESAFE_MODEL`, `TYPESAFE_TIMEOUT`, in seconds). No key → the gate is off.
+  `jevGate: false` in `settings.json` forces it off even with a key present.
 - **Fail-open:** it gets a hard per-call budget (default 600 ms) and *any* timeout, error or
   unusable answer means the desktop keeps its local heuristic. A broken gate behaves exactly like
   no gate; it can never block or delay a task beyond that budget.

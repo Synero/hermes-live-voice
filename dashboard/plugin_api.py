@@ -245,6 +245,17 @@ def _decide_voice_delegation_tool() -> dict:
     }
 
 
+def _voice_gate_on() -> bool:
+    """El gate corre si el backend tiene key y el operador no lo apagó.
+
+    ``settings.json`` puede traer ``{"jevGate": false}`` para forzar la heurística
+    local aunque haya key: mismo camino que un gate roto, sin gastar la credencial.
+    """
+    if not jev_gate.env_key():
+        return False
+    return _talk_settings().get("jevGate") is not False
+
+
 async def _voice_gate_route(name: str, arguments: dict, language: str | None) -> dict | None:
     """El gate de decisión de voz, o ``None`` cuando no aplica.
 
@@ -252,7 +263,7 @@ async def _voice_gate_route(name: str, arguments: dict, language: str | None) ->
     el nombre no es el suyo, o el gate está apagado en esta instalación,
     devuelve ``None`` y la ruta sigue con su dispatch normal.
     """
-    if name != _DECIDE_TOOL_NAME or not jev_gate.env_key():
+    if name != _DECIDE_TOOL_NAME or not _voice_gate_on():
         return None
     return await _decide_voice_delegation(arguments, language)
 
@@ -267,7 +278,7 @@ async def _decide_voice_delegation(arguments: dict, language: str | None) -> dic
     heurística.
     """
     lang = "en" if language == "en" else "es"
-    if not jev_gate.env_key():
+    if not _voice_gate_on():
         # Sin gate no hay nada que decidir: el desktop sigue con su heurística.
         return {"ok": True, "output": json.dumps({"enabled": False, "decision": None}, ensure_ascii=False)}
     try:
@@ -291,7 +302,7 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language
     tools = talk_tools.default_talk_tools()
     if allow_chat:
         tools = tools + [_send_to_chat_tool()]
-        if jev_gate.env_key():
+        if _voice_gate_on():
             tools = tools + [_decide_voice_delegation_tool()]
     if profile:
         sections = _bot_identity_sections(profile)
