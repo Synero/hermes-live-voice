@@ -1,5 +1,5 @@
 name: talk-desktop
-version: "0.2.2"
+version: "0.2.3"
 description: Full-duplex Live Voice for Hermes Desktop — Codex Live-1 (gpt-live-1) via the local
   Codex app-server on a ChatGPT subscription, with live transcript, voice tools and task
   delegation to the user's own agent. Optional gpt-realtime-2.1 lane.
