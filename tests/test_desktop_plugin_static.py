@@ -74,3 +74,12 @@ def test_transcript_user_label_is_not_a_hardcoded_name():
     src = _src()
     assert "Nacho" not in src, "hardcoded owner name found in desktop/plugin.js"
     assert re.search(r"children: isUser \? tr\('Tú', 'You'\)", src), "user label is not localized/owner-neutral"
+
+
+def test_backend_not_mounted_error_is_explained():
+    """A bare 405/404 from an unmounted plugin route must reach the user as a hint."""
+    src = _src()
+    assert "const backendHint = " in src
+    # both user-facing error sinks go through it
+    assert "backendHint(String(e?.message || e))" in src
+    assert src.count("backendHint(") >= 2
