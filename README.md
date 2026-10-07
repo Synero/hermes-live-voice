@@ -110,6 +110,14 @@ First-run gotchas:
 - **`codex` not found in the dashboard logs?** The backend resolves `codex` from
   `~/.local/bin`, `$PATH` and `/usr/local/bin`. If your service runs with a minimal
   `PATH`, add the codex bin directory to the service environment.
+- **"Method Not Allowed" (or "Not Found") when starting a voice session?** The backend half
+  is not mounted in the dashboard, so the request falls through to its catch-all page. The
+  dashboard mounts plugin routes **only at startup**: restart the dashboard (or the service
+  running it) after installing or enabling `talk-desktop`, and make sure it is listed under
+  `plugins.enabled` in `config.yaml`. Then look for `Mounted plugin API routes:
+  /api/plugins/talk-desktop/` in the Hermes logs; a `Failed to load plugin talk-desktop API
+  routes` warning (not an error) gives the real import failure. Remote setups: the dashboard
+  on the **server** is the one to restart, not the desktop app.
 - **Persona too generic?** The voice reads the focused bot's `SOUL.md`. No bot focused →
   it uses your Hermes default identity.
 

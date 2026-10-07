@@ -35,6 +35,18 @@ const SENTINEL_HOST = '__host'
 const EN = String((typeof navigator !== 'undefined' && navigator.language) || 'es').toLowerCase().indexOf('en') === 0
 const tr = (es, en) => (EN ? en : es)
 
+// A POST to /api/plugins/talk-desktop/* that the dashboard does not route (backend half not
+// loaded) falls into its GET-only SPA catch-all and comes back as a bare "Method Not Allowed"
+// (405) or "Not Found" (404). Say what that means instead of leaking the raw status text.
+const backendHint = (msg) => {
+  const m = String(msg || '')
+  if (/^\s*(method not allowed|not found)\s*$/i.test(m) || /\b(405|404)\b.*(method not allowed|not found)/i.test(m)) {
+    return tr('El backend de Live Voice no está cargado en el dashboard de Hermes. Reinicia el dashboard (o el servicio que lo corre) y revisa que talk-desktop esté habilitado; si sigue igual, busca "talk-desktop" en el log del dashboard.',
+      'The Live Voice backend is not loaded in the Hermes dashboard. Restart the dashboard (or the service running it) and check that talk-desktop is enabled; if it persists, search the dashboard log for "talk-desktop".')
+  }
+  return m
+}
+
 // Allowance de VOZ de Codex en desktop: ventana rolling de 5 horas, por plan.
 // Fuente: learn.chatgpt.com/docs/pricing (Plus ~15-30 min; Pro 5x ~1-2.5 h; Pro 20x ilimitado).
 const VOICE_CAP_MIN = plan => {
@@ -1165,7 +1177,7 @@ function CodexSection({ ctx }) {
   const load = () => {
     ctx.rest('/codex/status', { timeoutMs: 20000 })
       .then(r => setSt(r))
-      .catch(e => setSt({ error: String(e?.message || e).slice(0, 120) }))
+      .catch(e => setSt({ error: backendHint(String(e?.message || e)).slice(0, 240) }))
   }
   useEffect(() => { load() }, [])
   const loginStatus = st && st.login ? st.login.status : null
@@ -1498,7 +1510,7 @@ function ComposerLiveButton({ ctx }) {
     try {
       window.__talkLiveHandle = await startLive(ctx, { profile: effProfile, voice: vv, micId, outId, engine: eng, log: () => {} })
     } catch (e) {
-      let m = String(e?.message || e)
+      let m = backendHint(String(e?.message || e))
       if (m.indexOf('LIVE_SIN_QUOTA') >= 0) {
         m = m.replace('LIVE_SIN_QUOTA: ', '')
         try {
