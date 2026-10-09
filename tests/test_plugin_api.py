@@ -91,7 +91,8 @@ def test_create_session_concurrent_mints_do_not_deadlock():
         _MINT_LOCK=threading.Lock(),
         _resolve_voice=lambda _: "marin",
         _profile_home=lambda _p: Path("/tmp"),
-        _bot_display_name=lambda p: "Luna",
+        _bot_display_name=lambda p: "Example Bot",
+        _host_bot_name=lambda: "Hermes",
         HTTPException=type("HTTPException", (Exception,), {}),
     )
 
@@ -356,3 +357,19 @@ def test_codex_thread_recovery_keeps_session_language():
     assert ensured == ["en", "en"], f"recovery lost the session language: {ensured}"
     assert result["threadId"] == "tid-2"
     assert result["answer"] == "v=0"
+
+
+def test_host_bot_name_reads_agent_name_and_falls_back_to_hermes(tmp_path):
+    """Without a profile the voice session must not ship a hardcoded personal name."""
+    ns = load_unit(PLUGIN_API, "_host_bot_name")
+    ns.update(talk_config=SimpleNamespace(get_hermes_home=lambda: tmp_path))
+    assert ns["_host_bot_name"]() == "Hermes"
+    (tmp_path / "config.yaml").write_text("agent:\n  name: Atlas\n", encoding="utf-8")
+    assert ns["_host_bot_name"]() == "Atlas"
+    (tmp_path / "config.yaml").write_text("agent: [broken", encoding="utf-8")
+    assert ns["_host_bot_name"]() == "Hermes"
+
+
+def test_no_hardcoded_owner_name_in_shipped_code():
+    for rel in ("dashboard/plugin_api.py", "desktop/plugin.js"):
+        assert "Luna" not in (REPO / rel).read_text(encoding="utf-8"), rel

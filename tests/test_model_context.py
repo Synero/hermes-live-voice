@@ -95,6 +95,7 @@ def test_constructed_voice_prompts(profile, allow_chat, language):
         talk_capabilities=SimpleNamespace(instruction_section=lambda: None),
         _DIRECTIVE_PATH=REPO / 'language_directive.txt',
         _bot_display_name=lambda _: 'Example Bot',
+        _host_bot_name=lambda: 'Host Bot',
         talk_auth=SimpleNamespace(resolve_auth=lambda: SimpleNamespace(token='stub')),
         talk_config=SimpleNamespace(talk_model=lambda: 'stub'),
         talk_wire=SimpleNamespace(mint_ephemeral_session=lambda **kw: captured.update(kw)),
@@ -115,7 +116,7 @@ def test_constructed_voice_prompts(profile, allow_chat, language):
     persona.update(ns)
     prompt = persona['_codexlive_persona'](profile, language)
     assert ('VOICE: You are speaking' if language == 'en' else 'VOZ: hablas') in prompt
-    assert ('IDENTITY: You are ' if language == 'en' else 'IDENTIDAD: eres ') + ('Example Bot' if profile else 'Luna') in prompt
+    assert ('IDENTITY: You are ' if language == 'en' else 'IDENTIDAD: eres ') + ('Example Bot' if profile else 'Host Bot') in prompt
     assert all(text in prompt for text in sections.values())
 
 
@@ -280,7 +281,7 @@ def test_session_routes_keep_request_language_isolated(route):
         calls.append(language)
         return {'language': language}
     ns.update(_MINT_LOCK=threading.Lock(), _CL_LOCK=threading.Lock(),
-              _resolve_voice=lambda value: 'marin', _mint_for=mint, _codexlive_start=start)
+              _resolve_voice=lambda value: 'marin', _mint_for=mint, _codexlive_start=start, _host_bot_name=lambda: 'Hermes')
     class Request:
         def __init__(self, language):
             self.language = language

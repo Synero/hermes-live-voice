@@ -24,7 +24,7 @@ translate the bundled generic English preamble, tool schemas, or existing Englis
 voice policy; only that policy's changed spoken example follows the flag.
 User requests, dynamic tool output, SOUL/persona source text, and memory are not
 translated. Existing voice cleanup and length limits still apply to chat results.
-The Luna behavior is unchanged; neither preview sample adds an owner's name.
+The host bot behavior is unchanged; neither preview sample adds an owner's name.
 
 Tests use production function extraction and Node evaluation with transport and
 host stubs. They do not call providers or use a microphone. Existing Codex
