@@ -615,7 +615,6 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     }
     codexSession = r2
     handoffMode = (r2.handoff === 'server') ? 'server' : 'client'
-    if (r2.handoffDegraded) pushTranscript('sys', tr('Aviso: este servidor no soporta clientManagedHandoffs; las tareas de voz pueden ejecutarse en el lane ChatGPT del agente en vez de tu chat.', 'Notice: this server does not support clientManagedHandoffs; voice tasks may run on the agent ChatGPT lane instead of your chat.'))
     bus.botName = r2.botName || bus.botName || ''
     await pc.setRemoteDescription({ type: 'answer', sdp: r2.answer })
   } else {
@@ -1517,6 +1516,9 @@ function ComposerLiveButton({ ctx }) {
           ctx.storage.set(KEY_ENGINE, 'realtime')
           pushTranscript('sys', tr('Plan semanal sin quota: motor cambiado a gpt-realtime-2.1 — prueba de nuevo.', 'Weekly plan out of quota: engine switched to gpt-realtime-2.1 — try again.'))
         } catch {}
+      }
+      if (m.indexOf('LIVE_HANDOFF_NO_SOPORTADO') >= 0) {
+        m = tr('Este Codex no soporta delegar en tu chat (clientManagedHandoffs): actualiza Codex, usa delegation=server o el motor gpt-realtime.', 'This Codex does not support delegating to your chat (clientManagedHandoffs): update Codex, use delegation=server or the gpt-realtime engine.')
       }
       m = m.slice(0, 240)
       bus.set({ err: m, live: false, stage: 'error', widget: true, micLevel: 0, remoteLevel: 0 })

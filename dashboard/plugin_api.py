@@ -917,6 +917,24 @@ def _cl_thread_ensure(language: str = "es") -> str:
     return tid
 
 
+# Campos opcionales de thread/realtime/start que se pueden omitir si el app-server (más viejo)
+# los rechaza. Clave normalizada (sin "_", minúsculas) -> campos a quitar juntos.
+_RT_DROPPABLE = {
+    "delegationackfiller": ("delegationAckFiller",),
+    "realtimestartinstructions": ("realtimeStartInstructions", "prompt"),
+    "prompt": ("realtimeStartInstructions", "prompt"),
+}
+
+
+def _rejected_field_name(message: str) -> str | None:
+    """Nombre del campo que el servidor dice no conocer (serde-style), o None si no se puede leer.
+
+    Acepta: unknown field `foo`, unknown field "foo", unknown field: foo, unknown field `foo`, expected one of ...
+    """
+    m = re.search(r"unknown\s+field\s*[:=]?\s*[`'\"]?([A-Za-z_][A-Za-z0-9_.\-]*)", str(message), re.IGNORECASE)
+    return m.group(1) if m else None
+
+
 def _codexlive_start(profile: str | None, voice: str, offer: str, language: str = "es") -> dict:
     _cl_ensure()
     tid = _cl_thread_ensure(language)
@@ -937,24 +955,42 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
         "clientManagedHandoffs": client_managed,
         "delegationAckFiller": True,
     }
-    drop_groups = (("delegationAckFiller",), ("clientManagedHandoffs",), ("realtimeStartInstructions", "prompt"))
     dropped: list[str] = []
     start = len(_CL["notifs"])
-    gi = 0
     while True:
         try:
             _cl_request("thread/realtime/start", params, timeout=25)
             break
         except RuntimeError as exc:
             low = str(exc).lower()
-            if "unknown field" in low and gi < len(drop_groups):
-                for f in drop_groups[gi]:
-                    if f in params:
-                        params.pop(f)
-                        dropped.append(f)
-                gi += 1
-                start = len(_CL["notifs"])
-                continue
+            if "unknown field" in low:
+                # Solo se omite lo que el servidor NOMBRA y es opcional; cada campo a lo más una vez
+                # (si ya no está en params, el siguiente intento no puede repetir el mismo error).
+                name = _rejected_field_name(str(exc))
+                norm = (name or "").replace("_", "").lower()
+                if norm == "clientmanagedhandoffs" and "clientManagedHandoffs" in params:
+                    if client_managed:
+                        raise RuntimeError(
+                            "LIVE_HANDOFF_NO_SOPORTADO: el app-server de Codex no soporta clientManagedHandoffs; "
+                            "actualiza Codex, usa delegation=server o el motor gpt-realtime"
+                        ) from exc
+                    params.pop("clientManagedHandoffs")
+                    dropped.append("clientManagedHandoffs")
+                    start = len(_CL["notifs"])
+                    continue
+                group = _RT_DROPPABLE.get(norm)
+                if group and any(f in params for f in group):
+                    for f in group:
+                        if f in params:
+                            params.pop(f)
+                            dropped.append(f)
+                    start = len(_CL["notifs"])
+                    continue
+                shown = f"'{name}'" if name else "(sin nombre legible)"
+                raise RuntimeError(
+                    f"codex live: el app-server rechazó el campo {shown} de thread/realtime/start "
+                    f"y no se puede omitir: {str(exc)[:200]}"
+                ) from exc
             if "thread" in low and ("not found" in low or "no such" in low or "not loaded" in low or "missing" in low):
                 # thread obsoleto: recrear y reintentar una vez
                 _CL["thread_id"] = None
@@ -1001,10 +1037,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
     if dropped:
         _log.warning("codex live: app-server no soporta %s (se omitieron)", ", ".join(dropped))
         result["droppedFields"] = dropped
-        if "clientManagedHandoffs" in dropped and client_managed:
-            result["handoffDegraded"] = True
-            result["warning"] = ("el app-server no soporta clientManagedHandoffs: las delegaciones de voz pueden ejecutarse "
-                                 "en el hilo del agente (lane ChatGPT) en vez del chat del cliente")
+        result["warning"] = "el app-server no soporta: " + ", ".join(dropped) + " (se omitieron)"
     return result
 
 

@@ -12,6 +12,7 @@ import ast
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -19,6 +20,8 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN_API = REPO / "dashboard" / "plugin_api.py"
@@ -147,50 +150,129 @@ def test_cl_request_survives_buffer_pruning():
     assert ns["_cl_request"]("probe", {}, timeout=0.2) == "received"
 
 
-def test_codexlive_start_reports_dropped_capability_fields():
-    """#8: dropped capability fields are reported; a dropped clientManagedHandoffs degrades visibly.
-
-    The retry loop drops one group per "unknown field" answer, in fixed order
-    (delegationAckFiller, then clientManagedHandoffs), so the stub raises twice
-    before the third attempt succeeds.
-    """
+def _start_ns(delegation, errors):
+    """Load _codexlive_start with stubs; `errors` are raised by successive start attempts."""
     ns = load_unit(PLUGIN_API, "_codexlive_start")
+    helper = load_unit(PLUGIN_API, "_rejected_field_name")
+    helper["re"] = re
+    ns["_rejected_field_name"] = helper["_rejected_field_name"]
+    ns["_RT_DROPPABLE"] = _droppable_table()
     ns["_CL"] = {"proc": object(), "notifs": [], "seq": 0, "thread_id": "tid-1"}
-    warnings: list[tuple] = []
-
-    class LogStub:
-        def warning(self, *a):
-            warnings.append(a)
-
-    ns["_log"] = LogStub()
+    ns["_log"] = type("LogStub", (), {"warning": lambda *a: None})()
     ns["_cl_ensure"] = lambda: None
     ns["_cl_thread_ensure"] = lambda language: "tid-1"
     ns["_codexlive_persona"] = lambda profile, language: "persona"
-    ns["_talk_settings"] = lambda: {"delegation": "client"}
+    ns["_talk_settings"] = lambda: {"delegation": delegation}
     ns["_AGENT_INSTR"] = {"es": "agent"}
     ns["_AGENT_INSTR_SKIP"] = {"es": "skip"}
-
-    calls = {"start": 0}
+    sent: list[dict] = []
+    pending = list(errors)
 
     def request(method, params, timeout=25):
         if method == "thread/realtime/start":
-            calls["start"] += 1
-            if calls["start"] <= 2:
-                raise RuntimeError("unknown field clientManagedHandoffs")
+            sent.append(dict(params))
+            if pending:
+                raise RuntimeError(pending.pop(0))
             ns["_CL"]["notifs"].append({"method": "thread/realtime/sdp", "params": {"sdp": "v=0"}})
-            return {}
         return {}
 
     ns["_cl_request"] = request
+    return ns, sent
 
+
+def _droppable_table():
+    tree = ast.parse(PLUGIN_API.read_text(encoding="utf-8"))
+    for n in tree.body:
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_RT_DROPPABLE":
+            return ast.literal_eval(n.value)
+    raise AssertionError("_RT_DROPPABLE not found")
+
+
+def test_codexlive_start_compatible_server_drops_nothing():
+    ns, sent = _start_ns("client", [])
     result = ns["_codexlive_start"](None, "cove", "v=0")
-    assert result["handoffDegraded"] is True
-    assert "clientManagedHandoffs" in result["droppedFields"]
-    assert result["droppedFields"] == ["delegationAckFiller", "clientManagedHandoffs"]
+    assert len(sent) == 1 and sent[0]["clientManagedHandoffs"] is True
     assert result["handoff"] == "client"
-    assert result["answer"] == "v=0"
+    assert "droppedFields" not in result and "handoffDegraded" not in result and "warning" not in result
+
+
+def test_codexlive_start_drops_only_the_named_optional_field():
+    ns, sent = _start_ns("client", ["unknown field `delegationAckFiller`, expected one of `threadId`, `prompt`"])
+    result = ns["_codexlive_start"](None, "cove", "v=0")
+    assert result["droppedFields"] == ["delegationAckFiller"]
     assert result["warning"]
-    assert len(warnings) == 1 and "clientManagedHandoffs" in warnings[0][1]
+    assert result["handoff"] == "client"
+    assert "handoffDegraded" not in result
+    assert len(sent) == 2
+    assert all(r["clientManagedHandoffs"] is True for r in sent)
+    assert "delegationAckFiller" not in sent[1] and "prompt" in sent[1]
+
+
+def test_codexlive_start_error_naming_other_field_does_not_drop_scheduled_one():
+    # Unrelated unknown-field answers must not remove delegationAckFiller / clientManagedHandoffs.
+    cases = (('unknown field "bogusField"', "bogusField"), ("unknown field: otherThing", "otherThing"),
+             ("unknown field `x`, expected one of `a`, `b`", "x"))
+    for msg, name in cases:
+        ns, sent = _start_ns("client", [msg, msg])
+        with pytest.raises(RuntimeError) as ei:
+            ns["_codexlive_start"](None, "cove", "v=0")
+        assert len(sent) == 1, "no retry after an unrecognised field"
+        assert f"'{name}'" in str(ei.value)
+        assert sent[0]["clientManagedHandoffs"] is True and sent[0]["delegationAckFiller"] is True
+
+
+def test_codexlive_start_unparseable_unknown_field_raises_without_dropping():
+    ns, sent = _start_ns("client", ["unknown field", "unknown field"])
+    with pytest.raises(RuntimeError, match="rechaz"):
+        ns["_codexlive_start"](None, "cove", "v=0")
+    assert len(sent) == 1
+
+
+def test_codexlive_start_client_mode_fails_closed_on_client_managed_handoffs():
+    ns, sent = _start_ns("client", ["unknown field `clientManagedHandoffs`"])
+    with pytest.raises(RuntimeError, match="LIVE_HANDOFF_NO_SOPORTADO"):
+        ns["_codexlive_start"](None, "cove", "v=0")
+    assert all("clientManagedHandoffs" in r and r["clientManagedHandoffs"] is True for r in sent)
+    assert len(sent) == 1
+
+
+def test_codexlive_start_client_mode_fails_closed_after_optional_drop():
+    ns, sent = _start_ns("client", ["unknown field `delegationAckFiller`", "unknown field `clientManagedHandoffs`"])
+    with pytest.raises(RuntimeError, match="LIVE_HANDOFF_NO_SOPORTADO"):
+        ns["_codexlive_start"](None, "cove", "v=0")
+    assert all("clientManagedHandoffs" in r for r in sent) and len(sent) == 2
+
+
+def test_codexlive_start_server_mode_may_drop_client_managed_handoffs():
+    ns, sent = _start_ns("server", ["unknown field `clientManagedHandoffs`"])
+    result = ns["_codexlive_start"](None, "cove", "v=0")
+    assert result["droppedFields"] == ["clientManagedHandoffs"]
+    assert result["handoff"] == "server"
+    assert "clientManagedHandoffs" not in sent[1]
+
+
+def test_codexlive_start_naming_prompt_or_instructions_drops_both_once():
+    ns, sent = _start_ns("client", ["unknown field `realtimeStartInstructions`"])
+    result = ns["_codexlive_start"](None, "cove", "v=0")
+    assert result["droppedFields"] == ["realtimeStartInstructions", "prompt"]
+    assert "prompt" not in sent[1] and sent[1]["clientManagedHandoffs"] is True
+    # the same field rejected again (already dropped) must not loop
+    ns, sent = _start_ns("client", ["unknown field `prompt`", "unknown field `prompt`"])
+    with pytest.raises(RuntimeError):
+        ns["_codexlive_start"](None, "cove", "v=0")
+    assert len(sent) == 2
+
+
+def test_rejected_field_name_formats():
+    ns = load_unit(PLUGIN_API, "_rejected_field_name")
+    ns["re"] = re
+    f = ns["_rejected_field_name"]
+    assert f("unknown field `foo`, expected one of `a`") == "foo"
+    assert f('Invalid params: unknown field "foo"') == "foo"
+    assert f("unknown field: foo") == "foo"
+    assert f("UNKNOWN FIELD foo") == "foo"
+    assert f("unknown field") is None
+    assert f("something else") is None
 
 
 def test_interrupt_route_does_not_block_event_loop():
