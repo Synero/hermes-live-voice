@@ -164,6 +164,12 @@ const _voiceNote = () => (EN
   ? '[voice] Reply briefly and naturally in the user’s language so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors, use the latest intent. Do not claim something is done before it actually is.\n\n'
   : '[voz] Responde breve y natural en el idioma del usuario para LEER EN VOZ ALTA (2-4 frases, sin markdown ni listas). El texto es dictado y puede tener errores; usa la última intención. No afirmes que algo quedó hecho antes de hacerlo.\n\n')
 
+const _isUnknownParamError = e => {
+  const code = e && (e.code != null ? e.code : (e.data || {}).code)
+  const msg = String((e && (e.message || e)) || '')
+  return code === 4000 || /\b4000\b|extra|not permitted|unexpected|unknown (param|field|key)|surface/i.test(msg)
+}
+
 async function delegateToChat(text) {
   const req = String(text || '').trim()
   if (!req) return tr('Petición vacía.', 'Empty request.')
@@ -200,7 +206,15 @@ async function delegateToChat(text) {
           errText = tr('Error del agente: ', 'Agent error: ') + String((ev && (ev.message || ev.error || (ev.payload || {}).message)) || tr('desconocido', 'unknown'))
         }))
       }
-      await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
+      // Hosts con superficie voice-live agregan su propia nota de voz SOLO al input del modelo:
+      // la burbuja del usuario queda con lo que dijo. Hosts viejos rechazan el campo (params
+      // extra=forbid) y ahí caemos al prefijo de siempre.
+      try {
+        await host.request('prompt.submit', { session_id: sid, text: req, surface: 'voice-live' })
+      } catch (e) {
+        if (!_isUnknownParamError(e)) throw e
+        await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
+      }
     } catch (e) {
       return tr('No se pudo enviar al chat: ', 'Could not send to the chat: ') + String((e && e.message) || e || 'error')
     }
