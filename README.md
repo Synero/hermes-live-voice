@@ -9,7 +9,7 @@ for the voice lane.
 
 [![CI](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.4-informational)](plugin.yaml)
+[![Version](https://img.shields.io/badge/version-0.2.5-informational)](plugin.yaml)
 [![Status: preview](https://img.shields.io/badge/status-preview-orange)](#status--roadmap)
 
 [![Live Voice demo: a spoken request is delegated to the open chat and the answer is read back](docs/media/live-voice-demo.gif)](docs/media/live-voice-demo.mp4)
@@ -181,6 +181,7 @@ integration work.
 
 ## Changelog
 
+- **0.2.5** — no bot name is hardcoded any more: when no bot profile is chosen the voice identity uses the host `agent.name` from config, falling back to "Hermes" ([#16](https://github.com/Synero/hermes-live-voice/pull/16)); the "[voice] reply briefly" note no longer shows up inside the chat bubble on hosts that support the voice-live surface, it only reaches the model ([#17](https://github.com/Synero/hermes-live-voice/pull/17)); README now has a real demo recording and screenshots ([#18](https://github.com/Synero/hermes-live-voice/pull/18)).
 - **0.2.2** — identity and language polish, on top of community fixes by [@tillstriegel](https://github.com/tillstriegel) ([#4](https://github.com/Synero/hermes-live-voice/pull/4)): the voice identity prompt no longer hardcodes the owner's name, the model-facing voice context follows the session language (es/en), and — fixed here — the delegated-thread recovery path now keeps that language instead of silently recreating the thread in the fallback while the previous run was in the other language. Also: the transcript's user label is localized ("Tú"/"You") rather than a hardcoded name, and the identity docstring no longer lists private bot names. **Why it matters:** the plugin runs on other people's machines, so no installer should ever see someone else's name in the prompt or in the UI.
 - **0.2.1** — audit fixes: the backend now imports its **bundled** `talk_vendor` fallback on fresh installs (previously it needed `hermes-talk` installed); a concurrent `/session` pair no longer deadlocks the event loop; app-server RPC correlation survives reader-buffer pruning; `/codexlive/interrupt` runs off the event loop; `CODEX_HOME` is honored consistently across login/backup/logout; when an older app-server drops `clientManagedHandoffs` the response now carries `droppedFields`/`handoffDegraded`/`warning` and the desktop shows a notice instead of failing silently; the desktop interrupt call sends a plain object body (no double-encoding) and a muted mic can no longer be un-muted by barge-in.
 - **0.2.0** — call controls (mute button, hover states) + delegation hardening: voice-side delegation policy, TTS-friendly reply note, filler filter, task queue, and neutralized background thread turns (the Codex plan no longer pays for invisible tool work).
