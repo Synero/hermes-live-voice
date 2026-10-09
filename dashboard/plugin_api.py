@@ -87,6 +87,20 @@ def _profile_home(profile: str) -> Path | None:
     return p.resolve()
 
 
+def _host_bot_name() -> str:
+    """Nombre del bot host: `agent.name` del config.yaml del host; si no hay, "Hermes"."""
+    try:
+        import yaml  # PyYAML viene con Hermes
+
+        cfg = yaml.safe_load((talk_config.get_hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}
+        name = str(((cfg.get("agent") or {}).get("name") or "")).strip()
+        if name and len(name) <= 64:
+            return name
+    except Exception:
+        pass
+    return "Hermes"
+
+
 def _bot_display_name(profile: str) -> str:
     """Nombre del bot desde el encabezado del SOUL.md; fallback al slug.
 
@@ -459,7 +473,7 @@ if router is not None:
         return {
             "ok": True,
             "profile": profile,
-            "botName": _bot_display_name(profile) if profile else "Luna",
+            "botName": _bot_display_name(profile) if profile else _host_bot_name(),
             **descriptor.to_wire(),
             "authSource": auth.source,
             "voiceMode": "native",
@@ -814,7 +828,7 @@ def _codexlive_persona(profile: str | None, language: str = "es") -> str:
         name = _bot_display_name(profile)
     else:
         sections = talk_host.host().identity_sections()
-        name = "Luna"
+        name = _host_bot_name()
     base = talk_identity.build_instructions(sections, tools=[], lane="dashboard")
     if profile and "You are Hermes, speaking live" in base:
         base = base.replace("You are Hermes, speaking live", f"You are {name}, speaking live", 1)
@@ -1078,7 +1092,7 @@ if router is not None:
             "ok": True,
             "engine": "codex",
             "profile": profile,
-            "botName": _bot_display_name(profile) if profile else "Luna",
+            "botName": _bot_display_name(profile) if profile else _host_bot_name(),
             **result,
         }
 

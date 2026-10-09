@@ -1064,7 +1064,7 @@ function ConfigForm({ ctx, dense = false }) {
         jsx(SelectTrigger, { style: trigStyle, children: jsx(SelectValue, { style: valStyle }) }),
         jsxs(SelectContent, { children: [
           jsx(SelectItem, { value: '__auto', children: tr('Automático (según la ventana)', 'Auto (current window)') }),
-          jsx(SelectItem, { value: SENTINEL_HOST, children: 'Luna (host)' }),
+          jsx(SelectItem, { value: SENTINEL_HOST, children: tr('Bot principal (host)', 'Main bot (host)') }),
           ...bots.map(b => jsx(SelectItem, { value: String(b), children: opt(String(b)) }, 'bot-' + b))
         ] })
       ] })
@@ -1072,8 +1072,8 @@ function ConfigForm({ ctx, dense = false }) {
     jsx('div', { style: { fontSize: 10, color: 'var(--ui-text-tertiary, #a1a1aa)', marginTop: -4, marginBottom: 8 }, children: profile === ''
       ? (autoName
         ? tr('sigue la ventana → ', 'follows window → ') + autoName + ' (Bot)'
-        : tr('Automático: usa el bot de la ventana activa (si no, Luna).', 'Auto: uses the current window bot (otherwise Luna).'))
-      : tr('Fijo: ', 'Fixed: ') + (profile === '__host' ? 'Luna (host)' : profile + ' (Bot)') }),
+        : tr('Automático: usa el bot de la ventana activa (si no, el bot principal).', 'Auto: uses the current window bot (otherwise the main bot).'))
+      : tr('Fijo: ', 'Fixed: ') + (profile === '__host' ? tr('Bot principal (host)', 'Main bot (host)') : profile + ' (Bot)') }),
     jsxs('div', { style: field, children: [
       jsx('div', { style: label, children: tr('Motor de voz', 'Voice engine') }),
       jsxs(Select, { value: engine, onValueChange: setEngine, children: [
