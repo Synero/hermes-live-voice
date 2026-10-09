@@ -190,11 +190,12 @@ let now = 1000000;
 Date.now = () => now;
 const sleep = async () => { now += 300000; };
 const handlers = {};
-let completion = 'Resultado en español.', submitted;
+let completion = 'Resultado en español.', submitted, submittedSurface, legacyHost = false;
 const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
   handlers[name] = cb; return () => { delete handlers[name]; };
 }, request: async (method, body) => {
-  submitted = body.text;
+  if (legacyHost && 'surface' in body) { const e = new Error('Invalid params: surface: Extra inputs are not permitted'); e.code = 4000; throw e; }
+  submitted = body.text; submittedSurface = body.surface;
   if (completion instanceof Error) throw completion;
   if (completion === 'agent-error') handlers.error({message: 'fallo original'});
   else if (completion !== null) handlers['message.complete']({text: completion});
@@ -214,8 +215,16 @@ DELEGATION
   assert.match(await delegateToChat('revisa'), (EN ? /^No conversation is open/ : /^No hay una conversación/));
   host.state.focusedSessionId = 'session';
   assert.equal(await delegateToChat('revisa mi archivo'), completion);
+  // Host nuevo: la burbuja queda con lo dicho; la nota de voz la agrega el host solo al modelo.
+  assert.equal(submitted, 'revisa mi archivo');
+  assert.equal(submittedSurface, 'voice-live');
+  // Host viejo (params extra=forbid): cae al prefijo de siempre.
+  legacyHost = true;
+  assert.equal(await delegateToChat('revisa mi archivo'), completion);
   assert.match(submitted, (EN ? /^\[voice\] Reply briefly and naturally/ : /^\[voz\] Responde breve y natural/));
   assert.ok(submitted.endsWith('\n\nrevisa mi archivo'));
+  assert.equal(submittedSurface, undefined);
+  legacyHost = false;
   completion = new Error('fallo original');
   assert.equal(await delegateToChat('revisa'), tr('No se pudo enviar al chat: fallo original', 'Could not send to the chat: fallo original'));
   completion = 'agent-error';
