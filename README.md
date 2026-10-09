@@ -9,8 +9,12 @@ for the voice lane.
 
 [![CI](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.2-informational)](plugin.yaml)
+[![Version](https://img.shields.io/badge/version-0.2.4-informational)](plugin.yaml)
 [![Status: preview](https://img.shields.io/badge/status-preview-orange)](#status--roadmap)
+
+[![Live Voice demo: a spoken request is delegated to the open chat and the answer is read back](docs/media/live-voice-demo.gif)](docs/media/live-voice-demo.mp4)
+
+<sub>Real call recorded in Hermes Desktop: the bot voice is the live engine, the "user" voice is TTS. Click for the MP4 with sound.</sub>
 
 ---
 
@@ -39,6 +43,16 @@ for the voice lane.
 - 🛠️ **Tools from voice** — the model can run tasks: by default they are delegated into your **focused Hermes chat**, i.e. your own agent with **your** models and providers. A voice-side delegation policy keeps this clean (only real task requests are delegated, fillers stay conversational) and an internal queue prevents overlapping runs. An opt-in server-agent mode also exists.
 - 🎚️ **Audio & call controls** — device pickers, built-in mic test, one-tap **mute** and hang-up right in the composer.
 - 📊 **Usage panels** — measured voice minutes (rolling windows) and the Codex plan bucket.
+
+<table>
+<tr>
+<td width="62%"><img src="docs/media/live-transcript.png" alt="Live transcript popover next to the chat: the spoken request, the delegated task chip and the answer"></td>
+<td><img src="docs/media/settings-panel.png" alt="Live Voice settings: bot, voice engine, voice, work in the chat, microphone and output"></td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/media/composer-controls.png" alt="Composer with the Live Voice controls"></td>
+</tr>
+</table>
 
 ## Requirements
 
