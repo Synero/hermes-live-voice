@@ -32,7 +32,7 @@ const effVoiceFor = (engine, stored) => {
 }
 const SENTINEL_DEFAULT = '__default'
 const SENTINEL_HOST = '__host'
-const EN = String((typeof navigator !== 'undefined' && navigator.language) || 'es').toLowerCase().indexOf('en') === 0
+const EN = String((typeof navigator !== 'undefined' && navigator.language) || 'en').toLowerCase().indexOf('en') === 0
 const tr = (es, en) => (EN ? en : es)
 
 // A POST to /api/plugins/talk-desktop/* that the dashboard does not route (backend half not
@@ -172,7 +172,7 @@ async function delegateToChat(text) {
   const sid = String(atomGet(host.state.focusedSessionId) || atomGet(host.state.activeSessionId) || '')
   if (!sid) return tr('No hay una conversación abierta en la ventana. Dile al usuario que abra el chat donde quieres trabajar y que repita la petición.', 'No conversation is open in the window. Tell the user to open the chat where they want to work and repeat the request.')
   _delegating = { text: req, at: Date.now() }
-  pushTranscript('tool', 'trabajando en el chat…')
+  pushTranscript('tool', tr('trabajando en el chat…', 'working in the chat…'))
   let acc = ''
   let settled = false
   let finalText = ''
@@ -475,7 +475,7 @@ async function mintSession(ctx, profile, voice, allowChat) {
     body: { language: EN ? 'en' : 'es', profile: profile || null, voice: voice || null, allowChat: allowChat !== false },
     timeoutMs: 45000
   })
-  if (!sess || !sess.clientSecret) throw new Error('respuesta sin clientSecret: ' + JSON.stringify(sess).slice(0, 120))
+  if (!sess || !sess.clientSecret) throw new Error(tr('respuesta sin clientSecret: ', 'response without clientSecret: ') + JSON.stringify(sess).slice(0, 120))
   return sess
 }
 
@@ -502,10 +502,10 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
         pushTranscript('sys', tr('No pude abrir el micrófono elegido; usé el predeterminado del sistema.', 'Could not open the selected mic; using the system default.'))
       } catch (e2) {
-        throw new Error('MIC: ' + ((e2 && e2.name) || e?.name || '') + ' — revisa permisos o prueba otro micrófono en el engranaje')
+        throw new Error('MIC: ' + ((e2 && e2.name) || e?.name || '') + tr(' — revisa permisos o prueba otro micrófono en el engranaje', ' — check permissions or try another microphone in the gear menu'))
       }
     } else {
-      throw new Error('MIC: ' + (e?.name || '') + ' — revisa permisos o prueba otro micrófono en el engranaje')
+      throw new Error('MIC: ' + (e?.name || '') + tr(' — revisa permisos o prueba otro micrófono en el engranaje', ' — check permissions or try another microphone in the gear menu'))
     }
   }
   log('mic OK')
@@ -595,7 +595,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     if (pc.connectionState === 'connected') { playChime('connect'); if (!connectedAt) connectedAt = Date.now() }
     if (pc.connectionState === 'failed') {
       try { ctl.close && ctl.close() } catch {}
-      bus.set({ err: 'conexión perdida (failed)', widget: true, stage: 'error', live: false, micLevel: 0, remoteLevel: 0 })
+      bus.set({ err: tr('conexión perdida (failed)', 'connection lost (failed)'), widget: true, stage: 'error', live: false, micLevel: 0, remoteLevel: 0 })
     }
   }
 
@@ -611,7 +611,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     })
     if (!r2 || !r2.answer) {
       try { stream.getTracks().forEach(t => t.stop()) } catch {}
-      throw new Error('codex live: sin SDP de respuesta')
+      throw new Error(tr('codex live: sin SDP de respuesta', 'codex live: no answer SDP'))
     }
     codexSession = r2
     handoffMode = (r2.handoff === 'server') ? 'server' : 'client'
@@ -870,7 +870,7 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
       headers: { Authorization: 'Bearer ' + sess.clientSecret, 'Content-Type': 'application/sdp' },
       body: offer.sdp
     })
-    if (!res.ok) throw new Error('muestra: offer ' + res.status)
+    if (!res.ok) throw new Error(tr('muestra: offer ', 'sample: offer ') + res.status)
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() })
   }
   _pvSession = { key: eng + ':' + voice, stream, pc, rec: null, timer: null, ctxRef: ctx, threadId }
@@ -1119,7 +1119,7 @@ function ConfigForm({ ctx, dense = false }) {
         jsx(SelectTrigger, { style: trigStyle, children: jsx(SelectValue, { style: valStyle }) }),
         jsxs(SelectContent, { children: [
           jsx(SelectItem, { value: SENTINEL_DEFAULT, children: tr('Predeterminado del sistema', 'System default') }),
-          ...devs.mics.map((d, i) => jsx(SelectItem, { value: String(d.deviceId), children: opt(d.label || ('Micrófono ' + (i + 1))) }, 'mic-' + i))
+          ...devs.mics.map((d, i) => jsx(SelectItem, { value: String(d.deviceId), children: opt(d.label || (tr('Micrófono ', 'Microphone ') + (i + 1))) }, 'mic-' + i))
         ] })
       ] })
     ] }),
@@ -1268,13 +1268,13 @@ function CodexSection({ ctx }) {
         tr('1. Abre: ', '1. Open: '),
         jsx('span', { style: { fontWeight: 600 }, children: 'auth.openai.com/codex/device' }),
         ' ',
-        jsx('button', { type: 'button', onClick: () => copy(st.login.url || 'https://auth.openai.com/codex/device'), title: 'Copiar link', style: { border: 'none', background: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: 11, padding: 0 }, children: tr('(copiar)', '(copy)') })
+        jsx('button', { type: 'button', onClick: () => copy(st.login.url || 'https://auth.openai.com/codex/device'), title: tr('Copiar link', 'Copy link'), style: { border: 'none', background: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: 11, padding: 0 }, children: tr('(copiar)', '(copy)') })
       ] }),
       jsxs('div', { children: [
         tr('2. Código: ', '2. Code: '),
         jsx('span', { style: { fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13, letterSpacing: '0.06em' }, children: st.login.code || '…' }),
         ' ',
-        jsx('button', { type: 'button', onClick: () => copy(st.login.code || ''), title: 'Copiar código', style: { border: 'none', background: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: 11, padding: 0 }, children: tr('(copiar)', '(copy)') })
+        jsx('button', { type: 'button', onClick: () => copy(st.login.code || ''), title: tr('Copiar código', 'Copy code'), style: { border: 'none', background: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: 11, padding: 0 }, children: tr('(copiar)', '(copy)') })
       ] }),
       jsx('div', { style: { color: '#ca8a04' }, children: tr('Esperando aprobación… (expira en ~15 min)', 'Waiting for approval… (expires in ~15 min)') })
     ] }),
@@ -1284,7 +1284,7 @@ function CodexSection({ ctx }) {
     (usage && usage.ok) && jsxs('div', { style: { marginBottom: 8 }, children: [
       jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }, children: [
         jsx('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--ui-text-tertiary, #71717a)', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: tr('Uso', 'Usage') }),
-        jsxs('button', { type: 'button', title: 'Actualizar uso', onClick: loadUsage, style: { display: 'inline-flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', color: usageBusy ? 'var(--ui-text-tertiary, #71717a)' : '#3b82f6', cursor: usageBusy ? 'default' : 'pointer', fontSize: 11, padding: 0 }, children: [
+        jsxs('button', { type: 'button', title: tr('Actualizar uso', 'Refresh usage'), onClick: loadUsage, style: { display: 'inline-flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', color: usageBusy ? 'var(--ui-text-tertiary, #71717a)' : '#3b82f6', cursor: usageBusy ? 'default' : 'pointer', fontSize: 11, padding: 0 }, children: [
           usageBusy
             ? jsx('span', { style: { position: 'relative', width: 11, height: 11, display: 'inline-block' }, children: jsx(SpinnerRing, { inset: 0 }) })
             : jsx('svg', { width: 11, height: 11, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.2, strokeLinecap: 'round', children: [jsx('path', { d: 'M21 12a9 9 0 1 1-3-6.7' }), jsx('path', { d: 'M21 3v6h-6' })] }),
@@ -1537,7 +1537,7 @@ function ComposerLiveButton({ ctx }) {
         ref: btnRef,
         type: 'button',
         'data-context-menu-skip': 'true',
-        title: live ? 'Colgar Live Voice' : 'Live Voice — click para hablar',
+        title: live ? tr('Colgar Live Voice', 'Hang up Live Voice') : tr('Live Voice — click para hablar', 'Live Voice — click to talk'),
         onClick: toggle,
         onMouseEnter: () => setMicHover(true),
         onMouseLeave: () => setMicHover(false),
@@ -1567,7 +1567,7 @@ function ComposerLiveButton({ ctx }) {
       live && jsx('button', {
         type: 'button',
         'data-context-menu-skip': 'true',
-        title: s.muted ? 'Activar micrófono' : 'Silenciar micrófono',
+        title: s.muted ? tr('Activar micrófono', 'Unmute microphone') : tr('Silenciar micrófono', 'Mute microphone'),
         onClick: () => { try { window.__talkLiveHandle && window.__talkLiveHandle.toggleMute() } catch {} },
         onMouseEnter: () => setMuteHover(true),
         onMouseLeave: () => setMuteHover(false),
@@ -1595,7 +1595,7 @@ function ComposerLiveButton({ ctx }) {
             jsx(PopoverTrigger, { asChild: true, children: jsx('button', {
               type: 'button',
               'data-context-menu-skip': 'true',
-              title: 'Transcripción en vivo',
+              title: tr('Transcripción en vivo', 'Live transcript'),
               onMouseEnter: () => setTrHover(true),
               onMouseLeave: () => setTrHover(false),
               style: {
@@ -1624,7 +1624,7 @@ function ComposerLiveButton({ ctx }) {
             jsx(PopoverTrigger, { asChild: true, children: jsx('button', {
               type: 'button',
               'data-context-menu-skip': 'true',
-              title: 'Configurar Live Voice (bot, voz, micrófono, salida)',
+              title: tr('Configurar Live Voice (bot, voz, micrófono, salida)', 'Configure Live Voice (bot, voice, microphone, output)'),
               onMouseEnter: () => setGearHover(true),
               onMouseLeave: () => setGearHover(false),
               style: {

@@ -83,3 +83,90 @@ def test_backend_not_mounted_error_is_explained():
     # both user-facing error sinks go through it
     assert "backendHint(String(e?.message || e))" in src
     assert src.count("backendHint(") >= 2
+
+
+_SPANISH_CHARS = re.compile(r"[áéíóúñ¿¡ÁÉÍÓÚÑ]")
+_SPANISH_WORDS = re.compile(
+    r"\b(click|copiar|activar|silenciar|configurar|actualizar|colgar|para|hablar|"
+    r"micr[oó]fono|transcripci[oó]n|vivo|uso|voz|salida|el|la|los|las|de|del|con|sin|"
+    r"abrir|cerrar|guardar|elegir|probar|escuchar|buscar|enviar|cargando)\b",
+    re.I,
+)
+_UI_ATTR = re.compile(r"(?:\btitle|\bplaceholder|\bariaLabel|'aria-label'|\"aria-label\")\s*:\s*")
+
+
+def _strip_tr_calls(expr: str) -> str:
+    """Remove every balanced `tr(...)` call from an expression."""
+    out, i = [], 0
+    while i < len(expr):
+        m = re.compile(r"(?<![\w$.])tr\(").match(expr, i)
+        if m:
+            depth, i = 1, m.end()
+            while i < len(expr) and depth:
+                depth += {"(": 1, ")": -1}.get(expr[i], 0)
+                i += 1
+            continue
+        out.append(expr[i])
+        i += 1
+    return "".join(out)
+
+
+def _attr_values(src: str):
+    """Yield (line, value-expression) for each title/placeholder/aria-label attribute."""
+    for m in _UI_ATTR.finditer(src):
+        i, depth, quote = m.end(), 0, None
+        while i < len(src):
+            c = src[i]
+            if quote:
+                if c == "\\":
+                    i += 1
+                elif c == quote:
+                    quote = None
+            elif c in "'\"`":
+                quote = c
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif c == "," and depth == 0:
+                break
+            elif c == "\n" and depth == 0:
+                break
+            i += 1
+        yield src.count("\n", 0, m.start()) + 1, src[m.end():i]
+
+
+def test_ui_attributes_go_through_tr():
+    """#12: title / aria-label / placeholder must not carry bare Spanish literals.
+
+    Every user-visible attribute is either non-Spanish (a brand, a variable) or goes
+    through `tr(es, en)`, otherwise English users see Spanish tooltips.
+    """
+    src = _src()
+    values = list(_attr_values(src))
+    assert values, "no title/placeholder/aria-label attributes found — the scanner is broken"
+    bad = []
+    for line, expr in values:
+        rest = _strip_tr_calls(expr)
+        for lit in re.findall(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`[^`]*`", rest):
+            if _SPANISH_CHARS.search(lit) or _SPANISH_WORDS.search(lit):
+                bad.append(f"plugin.js:{line}: {lit}")
+    assert not bad, "Spanish literal outside tr():\n" + "\n".join(bad)
+
+
+def test_scanner_flags_untranslated_literal():
+    """The regression scanner itself must catch the bug it guards against."""
+    expr = "live ? 'Colgar Live Voice' : tr('Activar micrófono', 'Unmute microphone')"
+    rest = _strip_tr_calls(expr)
+    assert "Colgar" in rest and "micrófono" not in rest
+
+
+def test_language_fallback_is_english():
+    """#12: with no navigator.language the global catalog must default to English."""
+    src = _src()
+    m = re.search(r"^const EN = .*$", src, re.M)
+    assert m, "const EN not found"
+    assert "navigator.language) || 'en')" in m.group(0)
+    assert "|| 'es'" not in m.group(0)
