@@ -373,3 +373,35 @@ def test_host_bot_name_reads_agent_name_and_falls_back_to_hermes(tmp_path):
 def test_no_hardcoded_owner_name_in_shipped_code():
     for rel in ("dashboard/plugin_api.py", "desktop/plugin.js"):
         assert "Luna" not in (REPO / rel).read_text(encoding="utf-8"), rel
+
+
+def _bots_ns(root: Path) -> dict:
+    import yaml  # noqa: F401  (dependency of the unit under test)
+    ns: dict = {}
+    for name in ("_all_bot_profiles", "_plugin_active_in", "_list_bots", "_bots_missing_plugin"):
+        ns.update({k: v for k, v in load_unit(PLUGIN_API, name).items() if k == name})
+    ns.update(_PROFILES_ROOT=root, _PLUGIN_NAME="talk-desktop", Path=Path)
+    for name in ("_all_bot_profiles", "_plugin_active_in", "_list_bots", "_bots_missing_plugin"):
+        ns[name].__globals__.update(ns)
+    return ns
+
+
+def test_bot_picker_lists_only_profiles_that_enable_the_plugin(tmp_path):
+    """#23: the dashboard 404s every /api/plugins/talk-desktop/* call scoped to a profile whose
+    config.yaml does not enable the plugin, so /status must not offer those bots."""
+    def bot(name: str, cfg: str | None) -> None:
+        d = tmp_path / name
+        d.mkdir()
+        (d / "SOUL.md").write_text("x", encoding="utf-8")
+        if cfg is not None:
+            (d / "config.yaml").write_text(cfg, encoding="utf-8")
+
+    bot("on", "plugins:\n  enabled: [hermes-talk, talk-desktop]\n")
+    bot("off", "plugins:\n  enabled: [hermes-talk]\n")
+    bot("vetoed", "plugins:\n  enabled: [talk-desktop]\n  disabled: [talk-desktop]\n")
+    bot("bare", None)
+    bot("broken", "plugins: [oops\n")
+    (tmp_path / "no-soul").mkdir()
+    ns = _bots_ns(tmp_path)
+    assert ns["_list_bots"]() == ["on"]
+    assert ns["_bots_missing_plugin"]() == ["bare", "broken", "off", "vetoed"]

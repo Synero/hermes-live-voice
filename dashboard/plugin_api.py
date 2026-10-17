@@ -89,13 +89,44 @@ _PROFILES_ROOT = Path.home() / ".hermes" / "profiles"
 _MINT_LOCK = threading.Lock()
 
 
-def _list_bots() -> list[str]:
+_PLUGIN_NAME = "talk-desktop"
+
+
+def _all_bot_profiles() -> list[str]:
     if not _PROFILES_ROOT.is_dir():
         return []
     return sorted(
         e.name for e in _PROFILES_ROOT.iterdir()
         if e.is_dir() and (e / "SOUL.md").is_file()
     )
+
+
+def _plugin_active_in(home: Path) -> bool:
+    """True when talk-desktop is enabled (and not disabled) in that profile's config.yaml.
+
+    Mirrors the dashboard's per-request plugin gate: plugin code is discovered from the
+    process home, but /api/plugins/<name>/ answers 404 "Plugin not found" for any request
+    scoped to a profile whose own config does not enable the plugin (#23). Such bots must
+    not be offered in the Bot picker.
+    """
+    try:
+        import yaml  # PyYAML viene con Hermes
+
+        cfg = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return False
+    plugins = cfg.get("plugins") or {}
+    enabled = {str(x) for x in (plugins.get("enabled") or [])}
+    disabled = {str(x) for x in (plugins.get("disabled") or [])}
+    return _PLUGIN_NAME in enabled and _PLUGIN_NAME not in disabled
+
+
+def _list_bots() -> list[str]:
+    return [n for n in _all_bot_profiles() if _plugin_active_in(_PROFILES_ROOT / n)]
+
+
+def _bots_missing_plugin() -> list[str]:
+    return [n for n in _all_bot_profiles() if not _plugin_active_in(_PROFILES_ROOT / n)]
 
 
 def _profile_home(profile: str) -> Path | None:
@@ -559,6 +590,7 @@ if router is not None:
             "model": talk_config.talk_model(),
             "voices": list(talk_config.OPENAI_REALTIME_VOICES),
             "bots": _list_bots(),
+            "botsMissingPlugin": _bots_missing_plugin(),
         }
 
     @router.post("/session")

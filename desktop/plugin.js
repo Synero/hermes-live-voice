@@ -23,6 +23,14 @@ const KEY_MIC = 'mic.v3'
 const KEY_OUT = 'out.v3'
 const KEY_CHAT = 'chatwork.v1'
 const KEY_ENGINE = 'engine.v1'
+// '1' (or unset) = the Bot picker follows the focused window; '0' = the user pinned a choice (#24)
+const KEY_FOLLOW = 'followWindow.v1'
+const followsWindow = (ctx) => {
+  const f = ctx.storage.get(KEY_FOLLOW)
+  if (f === '0') return false
+  if (f === '1') return true
+  return !(ctx.storage.get(KEY_PROFILE) || '') // pre-flag installs: a saved bot means pinned
+}
 const VOICES = ['marin', 'cedar', 'alloy', 'echo', 'shimmer', 'verse', 'sage', 'ballad']
 const V3_VOICES = ['cove', 'juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol']
 const effVoiceFor = (engine, stored) => {
@@ -38,9 +46,20 @@ const tr = (es, en) => (EN ? en : es)
 // A POST to /api/plugins/talk-desktop/* that the dashboard does not route (backend half not
 // loaded) falls into its GET-only SPA catch-all and comes back as a bare "Method Not Allowed"
 // (405) or "Not Found" (404). Say what that means instead of leaking the raw status text.
+// Only the dashboard's own BARE status text counts: an upstream detail that merely quotes a
+// 404 (e.g. "codex live: unexpected status 404 Not Found ... url: https://chatgpt.com/...")
+// means the backend IS mounted and answering, so it passes through untouched (#22).
+// "Plugin not found" is the dashboard's per-profile gate: the picked bot's own Hermes home
+// does not have talk-desktop installed/enabled (#23).
+const _BARE_STATUS = /^(?:(?:HTTP\s*)?(?:405|404)\b[\s:\-]*)?(?:\{\s*"detail"\s*:\s*")?(method not allowed|not found|plugin not found)(?:"\s*\})?$/i
 const backendHint = (msg) => {
   const m = String(msg || '')
-  if (/^\s*(method not allowed|not found)\s*$/i.test(m) || /\b(405|404)\b.*(method not allowed|not found)/i.test(m)) {
+  const hit = _BARE_STATUS.exec(m.trim())
+  if (hit && /plugin not found/i.test(hit[1])) {
+    return tr('Este bot no tiene Live Voice activado en su perfil de Hermes. Actívalo ahí (HERMES_HOME=~/.hermes/profiles/<bot> hermes plugins install hermes-live-voice && hermes plugins enable talk-desktop) o elige otro bot.',
+      'This bot does not have Live Voice enabled in its Hermes profile. Enable it there (HERMES_HOME=~/.hermes/profiles/<bot> hermes plugins install hermes-live-voice && hermes plugins enable talk-desktop) or pick another bot.')
+  }
+  if (hit) {
     return tr('El backend de Live Voice no está cargado en el dashboard de Hermes. Reinicia el dashboard (o el servicio que lo corre) y revisa que talk-desktop esté habilitado; si sigue igual, busca "talk-desktop" en el log del dashboard.',
       'The Live Voice backend is not loaded in the Hermes dashboard. Restart the dashboard (or the service running it) and check that talk-desktop is enabled; if it persists, search the dashboard log for "talk-desktop".')
   }
@@ -968,10 +987,10 @@ function ConfigForm({ ctx, dense = false }) {
   const micBarRef = useRef(null)
   const micTestRef = useRef(null)
   const focusedProf = useValue(sdk.host.state.focusedSessionProfile)
-  const autoName = (() => { const f = String(focusedProf || ''); return f && f !== 'default' ? f : '' })()
   const [bots, setBots] = useState([])
   const [devs, setDevs] = useState({ mics: [], outs: [] })
   const [info, setInfo] = useState(null)
+  const autoName = (() => { const f = String(focusedProf || ''); return f && f !== 'default' && !(info && !info.error && (info.bots || []).indexOf(f) < 0) ? f : '' })()
 
   useEffect(() => {
     ctx.rest('/status', { timeoutMs: 20000 })
@@ -982,7 +1001,7 @@ function ConfigForm({ ctx, dense = false }) {
       .catch(() => {})
   }, [])
   useEffect(() => { ctx.storage.set(KEY_VOICE, voice) }, [voice])
-  useEffect(() => { ctx.storage.set(KEY_PROFILE, profile) }, [profile])
+  useEffect(() => { ctx.storage.set(KEY_PROFILE, profile); ctx.storage.set(KEY_FOLLOW, profile === '' ? '1' : '0') }, [profile])
   useEffect(() => { ctx.storage.set(KEY_MIC, micId) }, [micId])
   useEffect(() => { ctx.storage.set(KEY_OUT, outId) }, [outId])
   useEffect(() => { ctx.storage.set(KEY_CHAT, chatWork ? '1' : '0') }, [chatWork])
@@ -1009,8 +1028,13 @@ function ConfigForm({ ctx, dense = false }) {
     }
   }
   useEffect(() => () => { try { _pvStopSession() } catch {} }, [])
-  // al cambiar de bot/ventana el perfil vuelve a "seguir la ventana"
-  useEffect(() => { setProfile('') }, [String(focusedProf || '')])
+  // Window switches only matter in auto mode; a pinned bot stays, and the mount pass never
+  // wipes the saved choice (#24).
+  const firstFocusRef = useRef(true)
+  useEffect(() => {
+    if (firstFocusRef.current) { firstFocusRef.current = false; return }
+    if (followsWindow(ctx)) setProfile('')
+  }, [String(focusedProf || '')])
   useEffect(() => () => { try { stopMicTest() } catch {} }, [])
 
   const field = { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: dense ? 6 : 8 }
@@ -1088,6 +1112,8 @@ function ConfigForm({ ctx, dense = false }) {
         ? tr('sigue la ventana → ', 'follows window → ') + autoName + ' (Bot)'
         : tr('Automático: usa el bot de la ventana activa (si no, el bot principal).', 'Auto: uses the current window bot (otherwise the main bot).'))
       : tr('Fijo: ', 'Fixed: ') + (profile === '__host' ? tr('Bot principal (host)', 'Main bot (host)') : profile + ' (Bot)') }),
+    info && (info.botsMissingPlugin || []).length > 0 && jsx('div', { style: { fontSize: 10, color: 'var(--ui-text-tertiary, #a1a1aa)', marginTop: -4, marginBottom: 8, lineHeight: 1.4 }, children:
+      tr('Sin Live Voice en su perfil (no aparecen): ', 'Without Live Voice in their profile (hidden): ') + info.botsMissingPlugin.join(', ') }),
     jsxs('div', { style: field, children: [
       jsx('div', { style: label, children: tr('Motor de voz', 'Voice engine') }),
       jsxs(Select, { value: engine, onValueChange: setEngine, children: [
@@ -1460,12 +1486,19 @@ function ComposerLiveButton({ ctx }) {
   const autoBot = () => {
     const f = String(focusedProfile || '')
     if (!f || f === 'default') return ''
+    // Auto must not route to a bot whose home lacks the plugin (every call would 404 with
+    // "Plugin not found", #23): fall back to the host bot. Unknown list yet → keep the window bot.
+    if (botsRef.current && !botsRef.current.has(f)) return ''
     return f
   }
-  // al cambiar de bot/ventana, el perfil vuelve a seguir la ventana
+  // Auto mode re-reads the focused window on every change. A choice the user pinned in the
+  // picker (followWindow = '0') survives window switches and reloads; nothing is written on
+  // mount, so the saved value read by useState above is never wiped (#24).
+  const firstFocusRef = useRef(true)
   useEffect(() => {
+    if (firstFocusRef.current) { firstFocusRef.current = false; return }
+    if (!followsWindow(ctx)) return
     setProfile('')
-    try { ctx.storage.set(KEY_PROFILE, '') } catch {}
   }, [String(focusedProfile || '')])
   useEffect(() => {
     ctx.rest('/status', { timeoutMs: 20000 })

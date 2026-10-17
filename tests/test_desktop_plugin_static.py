@@ -5,6 +5,9 @@ Cheap source-text checks: no bundler, no browser, no network.
 from __future__ import annotations
 
 import re
+import shutil
+import pytest
+import subprocess
 from pathlib import Path
 
 PLUGIN_JS = Path(__file__).resolve().parents[1] / "desktop" / "plugin.js"
@@ -170,3 +173,60 @@ def test_language_fallback_is_english():
     assert m, "const EN not found"
     assert "navigator.language) || 'en')" in m.group(0)
     assert "|| 'es'" not in m.group(0)
+
+
+def _backend_hint_js(src: str) -> str:
+    """The self-contained backendHint block (EN/tr + regex + function), runnable in node."""
+    start = src.index("const EN = ")
+    body_start = src.index("const backendHint = ")
+    end = src.index("\n}\n", body_start) + 3
+    tr_end = src.index("\n", src.index("const tr = ")) + 1
+    return src[start:tr_end] + src[src.index("const _BARE_STATUS"):end]
+
+
+def test_backend_hint_keeps_upstream_404_detail_and_explains_bare_status():
+    """#22: an upstream Codex 404 quoted in a 502 detail must not be relabelled as
+    'backend not loaded'; the dashboard's bare 405/404 still is; #23: 'Plugin not found'
+    (per-profile gate) gets its own actionable message."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    js = _backend_hint_js(_src()) + r"""
+const assert = require('node:assert/strict');
+const up = 'codex live: unexpected status 404 Not Found, url: https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas';
+for (const m of ['502: {"detail":"' + up + '"}', up]) assert.equal(backendHint(m), m);
+for (const m of ['Method Not Allowed', 'Not Found', '405: {"detail":"Method Not Allowed"}', '404: {"detail":"Not Found"}', 'HTTP 405 Method Not Allowed']) {
+  const out = backendHint(m); assert.notEqual(out, m); assert.match(out, /backend/i); assert.doesNotMatch(out, /plugins enable/);
+}
+assert.match(backendHint('404: {"detail":"Plugin not found"}'), /plugins enable talk-desktop/);
+assert.equal(backendHint('codex live: rate limited'), 'codex live: rate limited');
+"""
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+
+
+def _component_body(src: str, name: str) -> str:
+    """Source of a top-level `function Name({...}) {` up to the next top-level declaration."""
+    m = re.search(rf"^function {name}\(.*\) \{{$", src, re.M)
+    assert m, f"function {name}(...) not found"
+    nxt = re.search(r"^(?:function |const |export |let |class )", src[m.end():], re.M)
+    return src[m.start(): m.end() + (nxt.start() if nxt else len(src))]
+
+
+def test_bot_picker_pin_survives_mount_and_window_switch():
+    """#24: neither ConfigForm nor ComposerLiveButton may clear the saved bot on mount, and a
+    pinned bot (followWindow.v1 = '0') must survive focused-window changes."""
+    src = _src()
+    assert "const KEY_FOLLOW = 'followWindow.v1'" in src
+    assert "storage.set(KEY_PROFILE, '')" not in src, "something still wipes the saved bot"
+    for fn in ("ConfigForm", "ComposerLiveButton"):
+        body = _component_body(src, fn)
+        assert "firstFocusRef.current = false; return" in body, f"{fn}: reset effect runs on mount"
+        assert "followsWindow(ctx)" in body, f"{fn}: reset ignores a pinned choice"
+    assert "ctx.storage.set(KEY_FOLLOW, profile === '' ? '1' : '0')" in _component_body(src, "ConfigForm")
+
+
+def test_auto_bot_skips_profiles_without_the_plugin():
+    """#23: auto mode must not route to a window bot the backend did not list."""
+    src = _src()
+    assert "if (botsRef.current && !botsRef.current.has(f)) return ''" in _component_body(src, "ComposerLiveButton")
+    assert "info.botsMissingPlugin" in _component_body(src, "ConfigForm")

@@ -9,7 +9,7 @@ for the voice lane.
 
 [![CI](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/Synero/hermes-live-voice/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.6-informational)](plugin.yaml)
+[![Version](https://img.shields.io/badge/version-0.2.7-informational)](plugin.yaml)
 [![Status: preview](https://img.shields.io/badge/status-preview-orange)](#status--roadmap)
 
 [![Live Voice demo: a spoken request is delegated to the open chat and the answer is read back](docs/media/live-voice-demo.gif)](docs/media/live-voice-demo.mp4)
@@ -132,6 +132,11 @@ First-run gotchas:
   /api/plugins/talk-desktop/` in the Hermes logs; a `Failed to load plugin talk-desktop API
   routes` warning (not an error) gives the real import failure. Remote setups: the dashboard
   on the **server** is the one to restart, not the desktop app.
+- **"Plugin not found" with a bot picked?** The dashboard gates plugin routes per profile:
+  the bot's own `config.yaml` must enable the plugin too. Run
+  `HERMES_HOME=~/.hermes/profiles/<bot> hermes plugins install hermes-live-voice` and
+  `HERMES_HOME=~/.hermes/profiles/<bot> hermes plugins enable talk-desktop`. Bots without it
+  are left out of the Bot picker and listed under it as hidden.
 - **Persona too generic?** The voice reads the focused bot's `SOUL.md`. No bot focused →
   it uses your Hermes default identity.
 
@@ -181,6 +186,7 @@ integration work.
 
 ## Changelog
 
+- **0.2.7** — Bot picker and error banner fixes reported by @guruor. A Codex upstream error that merely quotes a 404 is shown as-is instead of "backend not loaded" ([#22](https://github.com/Synero/hermes-live-voice/issues/22)). Bots whose profile does not enable `talk-desktop` are hidden from the picker (and listed as hidden), auto mode falls back to the main bot for them, and "Plugin not found" explains the per-profile fix ([#23](https://github.com/Synero/hermes-live-voice/issues/23)). A bot picked by hand now stays picked across window switches and reloads; auto mode still follows the focused window ([#24](https://github.com/Synero/hermes-live-voice/issues/24)).
 - **0.2.6** — the plugin no longer holds, refreshes or rewrites a Codex token ([#20](https://github.com/Synero/hermes-live-voice/issues/20)). On the ChatGPT-subscription lane Hermes signs the Realtime client-secret request itself (`credentialed_provider_request`, NousResearch/hermes-agent#136117) with its own locked refresh, the plan usage panel reads Hermes's read-only `fetch_account_usage`, and "Sign out" no longer deletes `~/.codex/auth.json` (it points at `hermes auth logout openai-codex`). The bundled `talk_auth` is pinned in-process so an installed `hermes-talk` cannot add a second refresher. `plugin.yaml` now declares `requires_auth: [openai-codex]` and needs Hermes `>=0.21.7`. API-key lanes and the gpt-live-1 app-server lane are unchanged. **Why it matters:** Codex refresh tokens are single-use, so two refreshers racing signed users out of Hermes and the Codex CLI.
 - **0.2.5** — no bot name is hardcoded any more: when no bot profile is chosen the voice identity uses the host `agent.name` from config, falling back to "Hermes" ([#16](https://github.com/Synero/hermes-live-voice/pull/16)); the "[voice] reply briefly" note no longer shows up inside the chat bubble on hosts that support the voice-live surface, it only reaches the model ([#17](https://github.com/Synero/hermes-live-voice/pull/17)); README now has a real demo recording and screenshots ([#18](https://github.com/Synero/hermes-live-voice/pull/18)).
 - **0.2.2** — identity and language polish, on top of community fixes by [@tillstriegel](https://github.com/tillstriegel) ([#4](https://github.com/Synero/hermes-live-voice/pull/4)): the voice identity prompt no longer hardcodes the owner's name, the model-facing voice context follows the session language (es/en), and — fixed here — the delegated-thread recovery path now keeps that language instead of silently recreating the thread in the fallback while the previous run was in the other language. Also: the transcript's user label is localized ("Tú"/"You") rather than a hardcoded name, and the identity docstring no longer lists private bot names. **Why it matters:** the plugin runs on other people's machines, so no installer should ever see someone else's name in the prompt or in the UI.
