@@ -36,15 +36,45 @@ def load_unit(path: Path, name: str) -> dict:
     assert len(nodes) == 1, f"expected exactly one {name} in {path}"
     node = nodes[0]
     node.decorator_list = []
+    body = [node]
+    if name != "_normalize_language":
+        helpers = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_normalize_language"]
+        if helpers:
+            helper = helpers[0]
+            helper.decorator_list = []
+            body.insert(0, helper)
     unit = ast.Module(
         body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")],
-                             level=0), node],
+                             level=0), *body],
         type_ignores=[],
     )
     ast.fix_missing_locations(unit)
     ns: dict = {"asyncio": asyncio, "time": time, "json": json}
     exec(compile(unit, str(path), "exec"), ns)
     return ns
+
+
+@pytest.mark.parametrize(('elapsed', 'poll', 'oauth', 'output', 'expected_status', 'expected_code'), [
+    (9999, None, None, '', 'error', 'timeout'),
+    (1, 0, 'valid', '', 'done', 'done'),
+    (1, 0, None, 'login failed', 'error', 'failed'),
+])
+def test_login_status_uses_stable_codes_without_starting_login(
+        elapsed, poll, oauth, output, expected_status, expected_code):
+    """Login status outcomes are language-neutral and need no real Codex process."""
+    ns = load_unit(PLUGIN_API, '_login_check')
+    proc = SimpleNamespace(poll=lambda: poll)
+    login = {'status': 'pending', 'proc': proc, 'started_at': 10,
+             'output': output, 'url': 'stub-url', 'code': 'stub-code'}
+    ns.update(_LOGIN=login, _LOGIN_TIMEOUT_S=60,
+              time=SimpleNamespace(time=lambda: 10 + elapsed),
+              _terminate=lambda _proc: None,
+              talk_auth=SimpleNamespace(auth_diagnostic=lambda: {'codex_oauth': oauth}))
+    ns['_login_check']()
+    assert login['status'] == expected_status
+    assert login['message_code'] == expected_code
+    if expected_code == 'failed':
+        assert 'login failed' in login['message']
 
 
 def test_vendored_bundle_imports_without_hermes_talk(tmp_path):
@@ -164,8 +194,8 @@ def _start_ns(delegation, errors):
     ns["_cl_thread_ensure"] = lambda language: "tid-1"
     ns["_codexlive_persona"] = lambda profile, language: "persona"
     ns["_talk_settings"] = lambda: {"delegation": delegation}
-    ns["_AGENT_INSTR"] = {"es": "agent"}
-    ns["_AGENT_INSTR_SKIP"] = {"es": "skip"}
+    ns["_AGENT_INSTR"] = {"es": "agente", "en": "agent", "de": "Agent"}
+    ns["_AGENT_INSTR_SKIP"] = {"es": "omitir", "en": "skip", "de": "skip"}
     sent: list[dict] = []
     pending = list(errors)
 

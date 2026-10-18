@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 PLUGIN_JS = Path(__file__).resolve().parents[1] / "desktop" / "plugin.js"
 
 
@@ -168,5 +170,116 @@ def test_language_fallback_is_english():
     src = _src()
     m = re.search(r"^const EN = .*$", src, re.M)
     assert m, "const EN not found"
-    assert "navigator.language) || 'en')" in m.group(0)
-    assert "|| 'es'" not in m.group(0)
+    assert "return 'en'" in src and "return 'es'" in src and "return 'de'" in src
+    assert "|| 'es'" not in src
+
+
+@pytest.mark.parametrize(('locale', 'expected'), [
+    ('de', 'de'), ('de-DE', 'de'), ('de-AT', 'de'),
+    ('es', 'es'), ('es-ES', 'es'), ('en-US', 'en'), ('fr-FR', 'en'),
+    ('', 'en'), (None, 'en'), ('default', 'en'), ('desktop', 'en'), ('esperanto', 'en'),
+])
+def test_locale_selection_and_translation(locale, expected):
+    """Production locale selection keeps only explicit German/Spanish and defaults to English."""
+    src = _src()
+    block = src[src.index('const SENTINEL_DEFAULT'):src.index('// A POST to /api/plugins')]
+    navigator = 'undefined' if locale is None else f'{{ language: {locale!r} }}'
+    script = f"""
+const navigator = {navigator};
+{block}
+if (LANGUAGE !== {expected!r}) process.exit(2);
+const localized = tr('Petición vacía.', 'Empty request.')
+if (LANGUAGE === 'de' && localized !== 'Leere Anfrage.') process.exit(3)
+if (LANGUAGE === 'es' && localized !== 'Petición vacía.') process.exit(4)
+if (LANGUAGE === 'en' && localized !== 'Empty request.') process.exit(5)
+"""
+    import subprocess
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or f'locale test exit {result.returncode}'
+
+
+def test_german_model_note_and_backend_language_propagation():
+    src = _src()
+    block = src[src.index('const SENTINEL_DEFAULT'):src.index('// A POST to /api/plugins')]
+    voice_note = src[src.index('const _voiceNote ='):src.index('const _isUnknownParamError')]
+    payload_count = src.count('body: { language: LANGUAGE')
+    assert payload_count == 4
+    script = f"""
+const assert = require('node:assert/strict');
+const navigator = {{language: 'de-DE'}};
+{block}
+{voice_note}
+assert.equal(LANGUAGE, 'de');
+assert.equal(tr('Petición vacía.', 'Empty request.'), 'Leere Anfrage.');
+assert.equal(tr('Tú', 'You'), 'Du');
+assert.match(_voiceNote(), /^\\[Stimme\\] Antworte kurz und natürlich/);
+"""
+    import subprocess
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_dynamic_connection_stages_have_localized_status_text():
+    src = _src()
+    assert 'const stageLabel =' in src, 'dynamic stage statuses are not localized'
+    block = src[src.index('const SENTINEL_DEFAULT'):src.index('// A POST to /api/plugins')]
+    stage = src[src.index('const stageLabel ='):src.index('const status =', src.index('const stageLabel ='))]
+    script = f"""
+const assert = require('node:assert/strict');
+const navigator = {{language: 'de-DE'}};
+{block}
+{stage}
+assert.equal(stageLabel('mint'), 'Sitzung wird vorbereitet …');
+assert.equal(stageLabel('connecting'), 'Verbindung wird hergestellt …');
+assert.equal(stageLabel('failed'), 'Fehlgeschlagen');
+assert.equal(stageLabel('unrecognized'), 'unrecognized');
+"""
+    import subprocess
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_german_catalog_covers_all_static_translation_calls():
+    """Every tr() call must provide German text, not silently fall through to English."""
+    src = _src()
+    assert re.search(r"const tr\s*=\s*\(es, en, de\)", src), 'tr must take a German message'
+    block = src[src.index('const SENTINEL_DEFAULT'):src.index('// A POST to /api/plugins')]
+    import json
+    import subprocess
+    node = subprocess.run(['node', '-e', f"const navigator={{language:'de'}};{block};process.stdout.write(JSON.stringify(Object.keys(DE)))"], capture_output=True, text=True)
+    assert node.returncode == 0, node.stderr
+    catalog = set(json.loads(node.stdout))
+    calls = []
+    for match in re.finditer(r"(?<![\w$.])tr\(", src):
+        start = match.end()
+        depth, quote, escaped, commas = 0, None, False, []
+        for i in range(start, len(src)):
+            char = src[i]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif char in "'\"`":
+                quote = char
+            elif char in '([{':
+                depth += 1
+            elif char in ')]}':
+                if char == ')' and depth == 0:
+                    args = src[start:i]
+                    break
+                depth -= 1
+            elif char == ',' and depth == 0:
+                commas.append(i)
+        else:
+            continue
+        if commas:
+            second = args[commas[0] - start + 1: (commas[1] if len(commas) > 1 else i) - start].strip()
+            literal = re.fullmatch(r"'((?:[^'\\]|\\.)*)'", second)
+            if literal:
+                calls.append(literal.group(1).replace("\\'", "'").replace('\\n', '\n'))
+    assert len(calls) >= 80, f'coverage scanner found only {len(calls)} static strings'
+    missing = sorted(set(calls) - catalog)
+    assert not missing, 'German translations missing for static tr() messages:\n' + '\n'.join(missing)

@@ -43,7 +43,7 @@ def test_minted_identity_does_not_invent_owner_or_host(profile, allow_chat):
     assert sections["PERSONA"] in instructions
     if profile:
         assert "You are Example Bot, speaking live" in instructions
-        assert "IDENTIDAD: Eres Example Bot." in instructions
+        assert "IDENTITY: You are Example Bot." in instructions
     else:
         assert "You are Hermes, speaking live" in instructions
     assert captured["tools"] == ([{"name": "send_to_chat"}] if allow_chat else [])

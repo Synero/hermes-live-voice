@@ -20,13 +20,19 @@ def default_talk_tools():
     return []
 
 
-def execute_talk_tool(name, arguments, language="es"):
-    if language != "en":
+def execute_talk_tool(name, arguments, language="en"):
+    value = str(language or "").strip().lower().replace("_", "-")
+    if value.startswith("de"):
         raise TalkToolError(
-            f"la tool de voz '{name}' no está disponible en esta instalación; "
-            "usa 'Trabajar en el chat' para tareas reales"
+            f"Das Sprach-Tool '{name}' ist in dieser Installation nicht verfügbar; "
+            "verwende 'Im Chat arbeiten' für echte Aufgaben"
+        )
+    if not value.startswith("es"):
+        raise TalkToolError(
+            f"the voice tool '{name}' is not available in this installation; "
+            "use 'Work in the chat' for real tasks"
         )
     raise TalkToolError(
-        f"the voice tool '{name}' is not available in this installation; "
-        "use 'Work in the chat' for real tasks"
+        f"la tool de voz '{name}' no está disponible en esta instalación; "
+        "usa 'Trabajar en el chat' para tareas reales"
     )

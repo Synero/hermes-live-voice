@@ -25,15 +25,124 @@ const KEY_CHAT = 'chatwork.v1'
 const KEY_ENGINE = 'engine.v1'
 const VOICES = ['marin', 'cedar', 'alloy', 'echo', 'shimmer', 'verse', 'sage', 'ballad']
 const V3_VOICES = ['cove', 'juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol']
+// Codex app-server schema includes these GPT-Live voice IDs, but live rollout support is not
+// exercised end-to-end here; expose them only as explicit experimental choices.
+const V3_EXPERIMENTAL_VOICES = ['aube', 'bubbie', 'haetsal', 'hanul', 'himari', 'leher', 'miko', 'neer', 'rindo', 'rio', 'rivage', 'sonna', 'tinta', 'viola']
+const V3_EXPERIMENTAL_LABELS = {
+  aube: ['Aube', 'Français'], bubbie: ['Bubbie', 'English'],
+  haetsal: ['Haetsal', '한국어'], hanul: ['Hanul', '한국어'], himari: ['Himari', '日本語'],
+  leher: ['Leher', 'हिन्दी'], miko: ['Miko', 'Deutsch'], neer: ['Neer', 'हिन्दी'],
+  rindo: ['Rindo', '日本語'], rio: ['Rio', 'Português (Brasil)'],
+  rivage: ['Rivage', 'Français'], sonna: ['Sonna', 'Deutsch'],
+  tinta: ['Tinta', 'Español (México)'], viola: ['Viola', 'Português (Brasil)']
+}
+const ALL_V3_VOICES = V3_VOICES.concat(V3_EXPERIMENTAL_VOICES)
+const voiceOptionLabel = voice => {
+  const details = V3_EXPERIMENTAL_LABELS[voice]
+  const name = details ? details[0] : voice.charAt(0).toUpperCase() + voice.slice(1)
+  return name
+}
+const voiceGroupsFor = engine => {
+  if (engine !== 'codex') return [{ label: 'Hermes', voices: VOICES.map(id => ({ id, label: voiceOptionLabel(id) })).sort((a, b) => a.label.localeCompare(b.label, 'en')) }]
+  const groups = new Map()
+  for (const id of ALL_V3_VOICES) {
+    const language = V3_EXPERIMENTAL_LABELS[id]?.[1] || 'Standard voices (multilingual)'
+    if (!groups.has(language)) groups.set(language, [])
+    groups.get(language).push({ id, label: voiceOptionLabel(id) })
+  }
+  const activeLanguage = ({ de: 'Deutsch', es: 'Español (México)', en: 'English' })[LANGUAGE]
+  const labels = [...groups.keys()].sort((a, b) => {
+    if (a === activeLanguage) return -1
+    if (b === activeLanguage) return 1
+    return a.localeCompare(b, 'en')
+  })
+  return labels.map(label => ({
+    label: label === 'Standard voices (multilingual)' ? ({ de: 'Standardstimmen (mehrsprachig)', es: 'Voces estándar (multilingües)', en: label })[LANGUAGE] : label,
+    voices: groups.get(label).sort((a, b) => a.label.localeCompare(b.label, 'en'))
+  }))
+}
+const voiceLanguageHint = () => tr(
+  'La indicación describe la orientación regional de la voz, no su único idioma compatible.',
+  'The language label describes the voice’s regional focus, not its only supported language.',
+  'Die Sprachangabe beschreibt die regionale Ausrichtung der Stimme, nicht ihre einzige unterstützte Sprache.')
 const effVoiceFor = (engine, stored) => {
   const v = String(stored || '')
-  if (engine === 'codex') return V3_VOICES.indexOf(v) >= 0 ? v : 'cove'
+  if (engine === 'codex') return ALL_V3_VOICES.indexOf(v) >= 0 ? v : 'cove'
   return VOICES.indexOf(v) >= 0 ? v : 'marin'
 }
 const SENTINEL_DEFAULT = '__default'
 const SENTINEL_HOST = '__host'
-const EN = String((typeof navigator !== 'undefined' && navigator.language) || 'en').toLowerCase().indexOf('en') === 0
-const tr = (es, en) => (EN ? en : es)
+const LANGUAGE = (() => {
+  const locale = String((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase()
+  const primary = locale.replace(/_/g, '-').split('-', 1)[0]
+  if (primary === 'de') return 'de'
+  if (primary === 'es') return 'es'
+  return 'en'
+})()
+const EN = LANGUAGE === 'en'
+const DE = {
+  'Weekly': 'Woche',
+  'The language label describes the voice’s regional focus, not its only supported language.': 'Die Sprachangabe beschreibt die regionale Ausrichtung der Stimme, nicht ihre einzige unterstützte Sprache.',
+  'The sign-in code expired before approval.': 'Der Anmeldecode ist vor der Bestätigung abgelaufen.',
+  'Sign-in failed': 'Anmeldung fehlgeschlagen',
+  'Codex CLI was not found on the server.': 'Codex CLI wurde auf dem Server nicht gefunden.',
+  'The Live Voice backend is not loaded in the Hermes dashboard. Restart the dashboard (or the service running it) and check that talk-desktop is enabled; if it persists, search the dashboard log for "talk-desktop".': 'Das Live-Voice-Backend ist im Hermes-Dashboard nicht geladen. Starte das Dashboard (oder den Dienst) neu und prüfe, ob talk-desktop aktiviert ist. Falls das Problem bleibt, suche im Dashboard-Protokoll nach „talk-desktop“.',
+  'Empty request.': 'Leere Anfrage.',
+  'That request is already in progress in the chat; wait for its response.': 'Diese Anfrage wird im Chat bereits bearbeitet. Warte auf die Antwort.',
+  'No conversation is open in the window. Tell the user to open the chat where they want to work and repeat the request.': 'In diesem Fenster ist kein Chat geöffnet. Öffne den gewünschten Chat und wiederhole die Anfrage.',
+  'working in the chat…': 'wird im Chat bearbeitet …', 'Agent error: ': 'Agentenfehler: ', 'unknown': 'unbekannt',
+  'Could not send to the chat: ': 'Konnte nicht an den Chat senden: ',
+  'The agent is still working in the chat; tell the user the response will appear there shortly.': 'Der Agent arbeitet noch im Chat. Die Antwort erscheint in Kürze dort.',
+  'The agent finished without visible text.': 'Der Agent hat ohne sichtbaren Text geantwortet.',
+  '[The real agent is ALREADY working on this request in the user’s chat. Now say ONE very short sentence (at most 8 words) in THEIR language confirming that you are handling it; do not give any results yet.]': '[Der eigentliche Agent bearbeitet diese Anfrage BEREITS im Chat. Bestätige jetzt mit EINEM sehr kurzen Satz (höchstens 8 Wörter) in der Sprache des Nutzers, dass du dich darum kümmerst. Nenne noch keine Ergebnisse.]',
+  'The tool ': 'Das Tool ', ' failed: ': ' ist fehlgeschlagen: ', '(code block omitted)': '(Codeblock ausgelassen)',
+  'delegation: ': 'Weitergabe: ', 'The server agent is on it; I will read the result when ready.': 'Der Server-Agent kümmert sich darum. Ich lese das Ergebnis vor, sobald es da ist.',
+  'small talk (not a task) — voice answers itself': 'Plauderei (keine Aufgabe) — die Stimme antwortet selbst',
+  'The user was just chatting, not asking for work. Reply briefly and naturally; if they were asking about something in progress, tell them you are still on it. Nothing to run.': 'Der Nutzer hat nur geplaudert und keine Aufgabe gestellt. Antworte kurz und natürlich. Falls nach einer laufenden Aufgabe gefragt wurde, sage, dass du noch daran arbeitest. Es ist nichts auszuführen.',
+  'Tasks are off: enable "Work in the chat".': 'Aufgaben sind deaktiviert: Aktiviere „Im Chat arbeiten“.',
+  'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.': 'Ich kann das nicht ausführen: „Im Chat arbeiten“ ist deaktiviert. Bitte aktiviere die Option in den Mikrofoneinstellungen.',
+  'queued (task in progress): ': 'Warteschlange (Aufgabe läuft): ',
+  'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.': 'Eine Aufgabe läuft bereits. Sage, dass du noch daran arbeitest. Eine Korrektur wird im Ergebnis berücksichtigt; bei einer neuen Aufgabe warte, bis die aktuelle abgeschlossen ist.',
+  'The task could not be completed in the chat.': 'Die Aufgabe konnte im Chat nicht abgeschlossen werden.', 'result: ': 'Ergebnis: ',
+  'Task result (answer the user with this, briefly and naturally): ': 'Aufgabenergebnis (antworte dem Nutzer kurz und natürlich damit): ',
+  'resuming queued: ': 'Warteschlangenaufgabe wird fortgesetzt: ', 'Queued task went stale and was not run.': 'Die Aufgabe in der Warteschlange ist veraltet und wurde nicht ausgeführt.',
+  'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.': 'Die Aufgabe in der Warteschlange ist veraltet und wurde nicht ausgeführt. Bitte den Nutzer, sie erneut zu nennen, falls sie noch erledigt werden soll.',
+  'interrupted — I am listening': 'Unterbrochen — ich höre zu', 'agent response streaming to the voice…': 'Agentenantwort wird an die Stimme übertragen …',
+  'response without clientSecret: ': 'Antwort ohne clientSecret: ', 'Could not open the selected mic; using the system default.': 'Das ausgewählte Mikrofon ließ sich nicht öffnen; verwende das Standardsystemmikrofon.',
+  ' — check permissions or try another microphone in the gear menu': ' — prüfe die Berechtigungen oder wähle im Zahnradmenü ein anderes Mikrofon',
+  'Microphone muted': 'Mikrofon stummgeschaltet', 'Microphone on': 'Mikrofon aktiv', 'connection lost (failed)': 'Verbindung fehlgeschlagen',
+  'codex live: no answer SDP': 'Codex Live: keine SDP-Antwort', 'sample: no answer SDP': 'Test: keine SDP-Antwort', 'sample: offer ': 'Testangebot ',
+  'sample: did not connect': 'Test: Verbindung nicht hergestellt', 'sample: no bot audio': 'Test: kein Bot-Audio', 'sample: no data': 'Test: keine Daten',
+  'Hang up the active call before testing voices.': 'Beende den laufenden Anruf, bevor du Stimmen testest.', 'Could not open the microphone: ': 'Mikrofon konnte nicht geöffnet werden: ',
+  'no host': 'kein Host', 'connected': 'verbunden', 'Auto (current window)': 'Automatisch (aktuelles Fenster)', 'Main bot (host)': 'Haupt-Bot (Host)',
+  'follows window → ': 'folgt Fenster → ', 'Auto: uses the current window bot (otherwise the main bot).': 'Automatisch: verwendet den Bot des aktuellen Fensters (sonst den Haupt-Bot).',
+  'Fixed: ': 'Fest: ', 'Voice engine': 'Sprachmodul', 'On your Codex subscription — recommended.': 'Über dein Codex-Abo — empfohlen.',
+  'realtime-2.1 (previous engine).': 'realtime-2.1 (vorheriges Sprachmodul).', 'Voice': 'Stimme', 'Generating…': 'Wird erzeugt …', 'Playing…': 'Wird abgespielt …',
+  '▶ Test voice': '▶ Stimme testen', 'The voice is recording its sample…': 'Die Stimme nimmt eine Hörprobe auf …', 'Listen before choosing (cached).': 'Höre vor der Auswahl hinein (wird zwischengespeichert).',
+  'Work in the chat': 'Im Chat arbeiten', 'Tasks run in the open chat with its tools and model (your Hermes config). The voice never runs anything on its own.': 'Aufgaben werden im geöffneten Chat mit dessen Tools und Modell ausgeführt (deine Hermes-Konfiguration). Die Stimme führt nichts eigenständig aus.',
+  'Audio': 'Audio', 'Microphone': 'Mikrofon', 'System default': 'Systemstandard', 'Microphone ': 'Mikrofon ', 'Stop': 'Stopp', 'Test': 'Test',
+  'Speak and watch the bar: if it stays flat, this mic is not capturing.': 'Sprich und beobachte den Balken: Bewegt er sich nicht, nimmt das Mikrofon keinen Ton auf.',
+  'Output': 'Ausgabe', 'Devices appear after granting the microphone the first time.': 'Geräte werden angezeigt, nachdem du den Mikrofonzugriff erstmals erlaubt hast.',
+  'waiting…': 'Wird erwartet …', 'Active': 'Aktiv', ' (Codex renews it)': ' (Codex erneuert sie)', 'No session': 'Keine Sitzung', 'Signed in': 'Angemeldet', 'Session': 'Sitzung',
+  'Preparing session…': 'Sitzung wird vorbereitet …', 'Establishing connection…': 'Verbindung wird hergestellt …', 'Connecting…': 'Verbindung wird hergestellt …',
+  'disconnected': 'getrennt', 'failed': 'Fehlgeschlagen', 'closed': 'geschlossen',
+  'What is this': 'Was ist das?',
+  'Voice uses the ChatGPT subscription via Codex OAuth (not an API key). Credentials live on the server only — this machine never sees them. "Active" = ready. The plugin never touches the token: Hermes signs the requests with its own sign-in. Sign in: you get a link and a code; open it in your browser and enter it. To sign out use `hermes auth logout openai-codex` or Hermes Desktop > Providers.': 'Live Voice verwendet das ChatGPT-Abo über Codex OAuth (keinen API-Schlüssel). Zugangsdaten liegen nur auf dem Server; dieses Gerät erhält sie nicht. „Aktiv“ bedeutet bereit. Das Plugin greift nie auf das Token zu: Hermes signiert Anfragen mit der eigenen Anmeldung. Zum Anmelden erhältst du einen Link und Code; öffne den Link im Browser und gib den Code ein. Zum Abmelden verwende `hermes auth logout openai-codex` oder Hermes Desktop > Providers.',
+  '1. Open: ': '1. Öffnen: ', 'Copy link': 'Link kopieren', '(copy)': '(kopieren)', '2. Code: ': '2. Code: ', 'Copy code': 'Code kopieren',
+  'Waiting for approval… (expires in ~15 min)': 'Warte auf Freigabe … (läuft in ca. 15 Min. ab)', 'Usage': 'Nutzung', 'Refresh usage': 'Nutzung aktualisieren', 'refresh': 'aktualisieren',
+  ' · rolling 5 h': ' · gleitende 5 Std.', ' sessions · 7 d: ': ' Sitzungen · 7 Tage: ', 'active voice min (measured on hangup) · plan allowance: Codex voice': 'Min. aktive Sprachzeit (beim Auflegen gemessen) · Kontingent des Tarifs: Codex Voice',
+  'recorded when each call ends': 'wird nach jedem Anruf erfasst', 'resets ': 'wird zurückgesetzt am ', '% used': '% genutzt', '% left': '% übrig', ' — near limit': ' — fast aufgebraucht',
+  'Restart': 'Neu starten', 'Restart sign-in': 'Anmeldung neu starten', 'Sign in': 'Anmelden', 'Cancel': 'Abbrechen', 'Sign out': 'Abmelden', 'error': 'Fehler', 'speaking': 'spricht', 'listening': 'hört zu', 'live': 'live', 'Hang up': 'Auflegen',
+  'Weekly plan out of quota: engine switched to gpt-realtime-2.1 — try again.': 'Wochenkontingent des Tarifs ausgeschöpft: Sprachmodul auf gpt-realtime-2.1 umgestellt — versuche es erneut.',
+  'This Codex does not support delegating to your chat (clientManagedHandoffs): update Codex, use delegation=server or the gpt-realtime engine.': 'Diese Codex-Version unterstützt keine Weitergabe an deinen Chat (clientManagedHandoffs): Aktualisiere Codex, verwende delegation=server oder das gpt-realtime-Sprachmodul.',
+  'Hang up Live Voice': 'Live Voice beenden', 'Live Voice — click to talk': 'Live Voice — zum Sprechen klicken', 'Unmute microphone': 'Mikrofon einschalten', 'Mute microphone': 'Mikrofon stummschalten',
+  'Live transcript': 'Live-Transkript', 'Configure Live Voice (bot, voice, microphone, output)': 'Live Voice konfigurieren (Bot, Stimme, Mikrofon, Ausgabe)', 'You': 'Du', 'Conversation': 'Gespräch', 'hide ▴': 'ausblenden ▴', 'show all ▾': 'alles anzeigen ▾',
+  'The transcript shows up here when you start talking.': 'Das Transkript erscheint hier, sobald du sprichst.', 'new': 'neu'
+}
+const tr = (es, en, de) => LANGUAGE === 'de' ? (de || DE[en] || en) : (EN ? en : es)
+
+const usageWindowLabel = label => ['semanal', 'weekly'].includes(String(label).trim().toLowerCase())
+  ? tr('Semanal', 'Weekly', 'Woche') : label
 
 // A POST to /api/plugins/talk-desktop/* that the dashboard does not route (backend half not
 // loaded) falls into its GET-only SPA catch-all and comes back as a bare "Method Not Allowed"
@@ -160,7 +269,7 @@ let _delegating = null
 
 // Voz → Chat: envía la petición al chat ENFOCADO (el agente real responde ahí,
 // streaming visible en la ventana) y devuelve el texto de la respuesta para leerlo.
-const _voiceNote = () => (EN
+const _voiceNote = () => LANGUAGE === 'de' ? '[Stimme] Antworte kurz und natürlich in der Sprache des Nutzers, damit die Antwort vorgelesen werden kann (2–4 Sätze, kein Markdown und keine Listen). Der Text ist diktiert und kann Fehler enthalten; folge der zuletzt geäußerten Absicht. Behaupte nicht, etwas sei erledigt, bevor es tatsächlich erledigt ist.\n\n' : (EN
   ? '[voice] Reply briefly and naturally in the user’s language so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors, use the latest intent. Do not claim something is done before it actually is.\n\n'
   : '[voz] Responde breve y natural en el idioma del usuario para LEER EN VOZ ALTA (2-4 frases, sin markdown ni listas). El texto es dictado y puede tener errores; usa la última intención. No afirmes que algo quedó hecho antes de hacerlo.\n\n')
 
@@ -235,13 +344,13 @@ async function runVoiceTool(ctx, callId, name, args, dc) {
   if (name === 'send_to_chat') {
     // ack hablado: confirmación breve mientras el chat trabaja
     try {
-      dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: tr('[El agente real YA está trabajando en el chat del usuario con esta petición. Ahora dile al usuario UNA sola frase muy breve (máximo 8 palabras) en SU idioma confirmando que lo estás gestionando; no des resultados aún.]', '[The real agent is ALREADY working on this request in the user’s chat. Now say ONE very short sentence (at most 8 words) in THEIR language confirming that you are handling it; do not give any results yet.]') }] } }))
+      dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: tr('[El agente real YA está trabajando en el chat del usuario con esta petición. Ahora dile al usuario UNA sola frase muy breve (máximo 8 palabras) en SU idioma confirmando que lo estás gestionando; no des resultados aún.]', '[The real agent is ALREADY working on this request in the user’s chat. Now say ONE very short sentence (at most 8 words) in THEIR language confirming that you are handling it; do not give any results yet.]', '[Der eigentliche Agent bearbeitet diese Anfrage BEREITS im Chat. Sage jetzt EINEN sehr kurzen Satz (höchstens 8 Wörter) in der Sprache des Nutzers, dass du dich darum kümmerst. Nenne noch keine Ergebnisse.]') }] } }))
       dc.send(JSON.stringify({ type: 'response.create' }))
     } catch {}
     output = await delegateToChat(String((args && (args.request || args.text)) || ''))
   } else {
     try {
-      const r = await ctx.rest('/tool', { method: 'POST', body: { language: EN ? 'en' : 'es', name: name, arguments: args || {} }, timeoutMs: 125000 })
+      const r = await ctx.rest('/tool', { method: 'POST', body: { language: LANGUAGE, name: name, arguments: args || {} }, timeoutMs: 125000 })
       output = (r && r.output) || ''
     } catch (e) {
       output = tr('La herramienta ', 'The tool ') + name + tr(' falló: ', ' failed: ') + String((e && e.message) || e).slice(0, 160)
@@ -486,7 +595,7 @@ function playChime(kind) {
 async function mintSession(ctx, profile, voice, allowChat) {
   const sess = await ctx.rest('/session', {
     method: 'POST',
-    body: { language: EN ? 'en' : 'es', profile: profile || null, voice: voice || null, allowChat: allowChat !== false },
+    body: { language: LANGUAGE, profile: profile || null, voice: voice || null, allowChat: allowChat !== false },
     timeoutMs: 45000
   })
   if (!sess || !sess.clientSecret) throw new Error(tr('respuesta sin clientSecret: ', 'response without clientSecret: ') + JSON.stringify(sess).slice(0, 120))
@@ -620,7 +729,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
   if (eng === 'codex') {
     const r2 = await ctx.rest('/codexlive/session', {
       method: 'POST',
-      body: { language: EN ? 'en' : 'es', profile: profile || null, voice: voice || 'cove', offer: offer.sdp },
+      body: { language: LANGUAGE, profile: profile || null, voice: voice || 'cove', offer: offer.sdp },
       timeoutMs: 120000
     })
     if (!r2 || !r2.answer) {
@@ -872,7 +981,7 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
   await pc.setLocalDescription(offer)
   let threadId = null
   if (eng === 'codex') {
-    const r = await ctx.rest('/codexlive/session', { method: 'POST', body: { language: EN ? 'en' : 'es', profile: profile || null, voice, offer: offer.sdp }, timeoutMs: 120000 })
+    const r = await ctx.rest('/codexlive/session', { method: 'POST', body: { language: LANGUAGE, profile: profile || null, voice, offer: offer.sdp }, timeoutMs: 120000 })
     if (!r || !r.answer) throw new Error(tr('muestra: sin SDP de respuesta', 'sample: no answer SDP'))
     threadId = r.threadId || null
     await pc.setRemoteDescription({ type: 'answer', sdp: r.answer })
@@ -895,9 +1004,11 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
     }, 200)
   })
   await new Promise(r => setTimeout(r, 500))
-  const phrase = tr(
-    'Di en voz alta exactamente esta frase, sin agregar nada más ni saludar: «Hola, esta es la voz ' + voice + ', así sueno cuando hablamos.»',
-    'Say out loud exactly this sentence, adding nothing else: "Hi, this is voice ' + voice + ', this is how I sound when we talk."')
+  const phrase = LANGUAGE === 'de'
+    ? 'Sprich genau diesen Satz laut aus und füge nichts hinzu: „Hallo, hier ist die Stimme ' + voice + ', so klinge ich in unserem Gespräch.“'
+    : tr(
+      'Di en voz alta exactamente esta frase, sin agregar nada más ni saludar: «Hola, esta es la voz ' + voice + ', así sueno cuando hablamos.»',
+      'Say out loud exactly this sentence, adding nothing else: "Hi, this is voice ' + voice + ', this is how I sound when we talk."')
   try {
     if (eng === 'codex') {
       dc.send(JSON.stringify({ type: 'session.context.append', content: [{ type: 'input_text', text: phrase }] }))
@@ -1105,8 +1216,12 @@ function ConfigForm({ ctx, dense = false }) {
       jsx('div', { style: label, children: tr('Voz', 'Voice') }),
       jsxs(Select, { value: effVoiceFor(engine, voice), onValueChange: setVoice, children: [
         jsx(SelectTrigger, { style: trigStyle, children: jsx(SelectValue, { style: valStyle }) }),
-        jsx(SelectContent, { children: (engine === 'codex' ? V3_VOICES : VOICES).map(v => jsx(SelectItem, { value: v, children: v }, v)) })
+        jsx(SelectContent, { children: voiceGroupsFor(engine).map(group => jsx('div', { role: 'group', 'aria-label': group.label, children: [
+          jsx('div', { 'aria-hidden': 'true', style: { padding: '6px 10px 3px', fontSize: 10, fontWeight: 700, color: 'var(--ui-text-tertiary)' }, children: group.label }, 'group-label-' + group.label),
+          ...group.voices.map(({ id, label }) => jsx(SelectItem, { value: id, children: label }, id))
+        ] }, 'group-' + group.label)) })
       ] }),
+      engine === 'codex' && jsx('div', { style: { fontSize: 11, color: 'var(--ui-text-tertiary)', marginTop: 4 }, children: voiceLanguageHint() }),
       jsxs('div', { style: { display: 'none', alignItems: 'center', gap: 8, marginTop: 6 }, children: [   // preview desactivado por ahora
         jsx(Button, {
           variant: 'secondary', size: 'sm', onClick: runPreview, style: { flexShrink: 0 },
@@ -1222,7 +1337,7 @@ function CodexSection({ ctx }) {
   // The sign-in belongs to Hermes: the plugin never deletes ~/.codex/auth.json.
   const HERMES_LOGOUT = 'hermes auth logout openai-codex'
   const logout = () => {
-    setLocalMsg(tr('La sesión es de Hermes. Ciérrala con `' + HERMES_LOGOUT + '` o en Hermes Desktop > Providers.', 'The sign-in belongs to Hermes. Sign out with `' + HERMES_LOGOUT + '` or Hermes Desktop > Providers.'))
+    setLocalMsg(tr('La sesión es de Hermes. Ciérrala con `' + HERMES_LOGOUT + '` o en Hermes Desktop > Providers.', 'The sign-in belongs to Hermes. Sign out with `' + HERMES_LOGOUT + '` or Hermes Desktop > Providers.', 'Die Anmeldung gehört zu Hermes. Melde dich mit `' + HERMES_LOGOUT + '` oder über Hermes Desktop > Providers ab.'))
   }
   const copy = text => { try { navigator.clipboard?.writeText(text) } catch {} }
 
@@ -1237,8 +1352,12 @@ function CodexSection({ ctx }) {
     else chip = { text: tr('Sin sesión', 'No session'), color: '#dc2626' }
   }
   const pending = st && st.login && st.login.status === 'pending'
-  const loginErr = st && st.login && st.login.status === 'error' ? (st.login.message || '') : ''
-  const doneMsg = st && st.login && st.login.status === 'done' ? (st.login.message || tr('Sesión iniciada', 'Signed in')) : ''
+  const loginErr = st && st.login && st.login.status === 'error'
+    ? ({timeout: tr('El código de inicio de sesión venció sin aprobarse.', 'The sign-in code expired before approval.', 'Der Anmeldecode ist vor der Bestätigung abgelaufen.'),
+      failed: tr('No se pudo iniciar sesión', 'Sign-in failed', 'Anmeldung fehlgeschlagen'),
+      codex_missing: tr('No se encontró Codex CLI en el servidor.', 'Codex CLI was not found on the server.', 'Codex CLI wurde auf dem Server nicht gefunden.') }[st.login.message_code] || st.login.message || '')
+      + (st.login.message && st.login.message_code === 'failed' ? ': ' + st.login.message.replace(/^Details:\s*/, '') : '') : ''
+  const doneMsg = st && st.login && st.login.status === 'done' ? tr('Sesión iniciada', 'Signed in', 'Angemeldet') : ''
   const active = st && st.lane === 'codex-oauth' && (st.codexOauth === 'valid' || st.codexOauth === 'expired')
 
   const cbtn = (label, onClick, tone) => jsx('button', {
@@ -1346,7 +1465,7 @@ function CodexSection({ ctx }) {
         }
         return jsxs('div', { style: { fontSize: 10.5, color: 'var(--ui-text-tertiary, #71717a)', marginBottom: 5 }, children: [
           jsxs('div', { style: { display: 'flex', justifyContent: 'space-between' }, children: [
-            jsx('span', { children: label }),
+            jsx('span', { children: usageWindowLabel(label) }),
             jsx('span', { style: { fontWeight: 700, color }, children: pct + tr('% usado', '% used') + ' · ' + (100 - pct) + tr('% libre', '% left') + (pct >= 90 ? tr(' — cerca del límite', ' — near limit') : '') })
           ] }),
           jsx('div', { style: { height: 4, borderRadius: 2, background: 'rgba(127,127,127,0.18)', marginTop: 2, overflow: 'hidden' }, children:
@@ -1422,7 +1541,19 @@ function LivePanel() {
   const s = useLiveState()
   const stop = () => { try { window.__talkLiveHandle?.close() } catch {} }
   const dot = s.err ? '#dc2626' : (s.stage === 'connected' ? '#22c55e' : '#f59e0b')
-  const status = s.err ? tr('error', 'error') : (s.spkBot ? tr('hablando', 'speaking') : (s.spkUser ? tr('te escucho', 'listening') : (s.stage === 'connected' ? tr('en vivo', 'live') : s.stage)))
+  const stageLabel = stage => ({
+    idle: '',
+    mint: tr('Preparando sesión…', 'Preparing session…', 'Sitzung wird vorbereitet …'),
+    offering: tr('Estableciendo conexión…', 'Establishing connection…', 'Verbindung wird hergestellt …'),
+    new: tr('nuevo', 'new', 'neu'),
+    connecting: tr('Conectando…', 'Connecting…', 'Verbindung wird hergestellt …'),
+    connected: tr('conectado', 'connected'),
+    disconnected: tr('desconectado', 'disconnected'),
+    failed: tr('Falló', 'failed', 'Fehlgeschlagen'),
+    closed: tr('Cerrado', 'closed', 'geschlossen'),
+    error: tr('error', 'error', 'Fehler')
+  }[stage] ?? stage)
+  const status = s.err ? tr('error', 'error') : (s.spkBot ? tr('hablando', 'speaking') : (s.spkUser ? tr('te escucho', 'listening') : (s.stage === 'connected' ? tr('en vivo', 'live') : stageLabel(s.stage))))
   return jsxs('div', { style: { display: 'flex', flexDirection: 'column' }, children: [
     jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 14px 6px' }, children: [
       jsxs('div', { style: { display: 'flex', alignItems: 'center', minWidth: 0 }, children: [

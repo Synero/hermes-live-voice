@@ -188,23 +188,40 @@ _LANGUAGE_DIRECTIVE_DEFAULT = {
         'English when the user speaks Spanish. Your voice should sound like a native speaker of the language '
         'you are using.'
     ),
+    "de": (
+        '\n\nSPRACHE UND STIMME: Sprich in der Sprache des Nutzers. Antworte auf Deutsch, wenn der Nutzer Deutsch '
+        'spricht; auf Spanisch in natürlichem chilenischem Spanisch, wenn er Spanisch spricht; und auf Englisch, '
+        'wenn er Englisch spricht. Mische niemals unnötig die Sprachen. Deine Stimme soll wie die eines '
+        'Muttersprachlers der jeweils verwendeten Sprache klingen.'
+    ),
 }
 
 _LANGUAGE_DIRECTIVE_BUNDLE = "\n\n".join(value.strip() for value in _LANGUAGE_DIRECTIVE_DEFAULT.values())
 
 
-def _language_directive(language: str = "es") -> str:
+def _normalize_language(language: str | None) -> str:
+    """Normalize supported locales; unknown or missing values default to English."""
+    value = str(language or "").strip().lower().replace("_", "-").split("-", 1)[0]
+    if value == "de":
+        return "de"
+    if value == "es":
+        return "es"
+    return "en"
+
+
+def _language_directive(language: str = "en") -> str:
     """Select shipped defaults by locale; preserve custom file content verbatim."""
     try:
         if _DIRECTIVE_PATH.is_file():
             text = _DIRECTIVE_PATH.read_text(encoding="utf-8")
             shipped = {value.strip() for value in _LANGUAGE_DIRECTIVE_DEFAULT.values()}
             shipped.add(_LANGUAGE_DIRECTIVE_BUNDLE)
+            shipped.add("\n\n".join(_LANGUAGE_DIRECTIVE_DEFAULT[key].strip() for key in ("es", "en")))
             if text.strip() and text.strip() not in shipped:
                 return "\n\n" + text
     except OSError:
         pass
-    return _LANGUAGE_DIRECTIVE_DEFAULT["en" if language == "en" else "es"]
+    return _LANGUAGE_DIRECTIVE_DEFAULT[_normalize_language(language)]
 
 
 def _resolve_voice(requested: str | None) -> str:
@@ -248,8 +265,9 @@ def _send_to_chat_tool() -> dict:
     }
 
 
-def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language: str = "es"):
+def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language: str = "en"):
     """Mint con identity del bot (o del host si no se pide profile)."""
+    language = _normalize_language(language)
     tools = talk_tools.default_talk_tools()
     if allow_chat:
         tools = tools + [_send_to_chat_tool()]
@@ -274,6 +292,13 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language
                 "where the real agent replies. You will then receive the result; read or summarize it "
                 "aloud naturally in no more than 2-3 sentences. If no chat is open, the tool will tell you."
             ) if language == "en" else (
+                "\n\nSPRACHE + CHAT: Der Nutzer hat einen Chat in der App geöffnet. Beantworte einfache Fragen und "
+                "Smalltalk selbst. Wenn der Nutzer echte Arbeit verlangt (etwas erledigen, erstellen, prüfen, "
+                "Informationen suchen oder handeln), rufe send_to_chat mit der vollständigen Anfrage in seiner "
+                "Sprache auf. Das System sendet sie an den geöffneten Chat, wo der eigentliche Agent antwortet. "
+                "Lies das Ergebnis anschließend natürlich in höchstens 2–3 Sätzen vor. Falls kein Chat geöffnet ist, "
+                "weist dich das Tool darauf hin."
+            ) if language == "de" else (
                 "\n\nVOZ + CHAT: el usuario tiene un chat abierto en la aplicaci\u00f3n. Para conversaci\u00f3n "
                 "r\u00e1pida, preguntas simples o charla, responde T\u00da directo. Cuando pida TRABAJO REAL "
                 "(hacer, crear, revisar, buscar en sus cosas, actuar sobre algo), llama a send_to_chat con la "
@@ -293,6 +318,9 @@ def _mint_for(profile: str | None, voice: str, allow_chat: bool = True, language
                 f"\n\nIDENTITY: You are {name}. If asked who you are, "
                 f"answer as {name} in that role — never say you are Hermes, a model, or a generic assistant."
             ) if language == "en" else (
+                f"\n\nIDENTITÄT: Du bist {name}. Wenn du gefragt wirst, wer du bist, antworte als {name} in dieser Rolle — "
+                "sage niemals, dass du Hermes, ein Modell oder ein allgemeiner Assistent bist."
+            ) if language == "de" else (
                 f"\n\nIDENTIDAD: Eres {name}. Si te preguntan quién eres, "
                 f"responde como {name} con su rol — nunca digas que eres Hermes, un modelo, ni un asistente genérico."
             )
@@ -485,7 +513,7 @@ def _login_check() -> None:
         started = _LOGIN.get("started_at") or 0
         if time.time() - started > _LOGIN_TIMEOUT_S:
             _terminate(proc)
-            _LOGIN.update(status="error", message="timeout: el código expiró sin aprobarse", proc=None)
+            _LOGIN.update(status="error", message_code="timeout", message=None, proc=None)
         return
     # process finished (or vanished)
     try:
@@ -494,11 +522,11 @@ def _login_check() -> None:
     except Exception:  # noqa: BLE001
         state = None
     if state in {"valid", "expired"}:
-        _LOGIN.update(status="done", message="Sesión iniciada", proc=None, url=None, code=None,
+        _LOGIN.update(status="done", message_code="done", message=None, proc=None, url=None, code=None,
                       output="")
     else:
         tail = " / ".join((_LOGIN.get("output") or "").strip().splitlines()[-3:])
-        _LOGIN.update(status="error", message=("No se pudo iniciar sesión" + (f": {tail}" if tail else "")),
+        _LOGIN.update(status="error", message_code="failed", message=(f"Details: {tail}" if tail else None),
                       proc=None)
 
 
@@ -510,7 +538,7 @@ def _start_codex_login() -> dict:
             _terminate(proc)
         binary = _codex_binary()
         if not binary:
-            return {"ok": False, "message": "codex CLI no encontrado en el servidor"}
+            return {"ok": False, "message_code": "codex_missing"}
         # Respaldo de la sesión actual: iniciar un login nuevo puede reemplazar/limpiar
         # ~/.codex/auth.json antes de completarse (verificado 2026-09-11).
         auth_path = _codex_auth_path()
@@ -699,13 +727,13 @@ if router is not None:
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        language = body.get("language")
+        language = _normalize_language(body.get("language"))
         name = str(body.get("name") or "").strip()
         arguments = body.get("arguments")
         if not isinstance(arguments, dict):
             arguments = {}
         if not name:
-            raise HTTPException(status_code=400, detail="name is required" if language == "en" else "name requerido")
+            raise HTTPException(status_code=400, detail=("name is required" if language == "en" else "Name ist erforderlich" if language == "de" else "name requerido"))
         try:
             output = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -720,6 +748,8 @@ if router is not None:
                     f"The tool {name} is still running; I will stop waiting here. "
                     "Ask me to check the result in a moment."
                 ) if language == "en" else (
+                    f"Das Tool {name} läuft noch; ich warte hier nicht länger. Bitte mich gleich, das Ergebnis zu prüfen."
+                ) if language == "de" else (
                     f"La herramienta {name} sigue corriendo; no espero más aquí. "
                     "Pídeme revisar el resultado en un momento."
                 )
@@ -870,7 +900,8 @@ def _cl_ensure() -> None:
                                "capabilities": {"experimentalApi": True}}, timeout=25)
 
 
-def _codexlive_persona(profile: str | None, language: str = "es") -> str:
+def _codexlive_persona(profile: str | None, language: str = "en") -> str:
+    language = _normalize_language(language)
     if profile:
         sections = _bot_identity_sections(profile)
         name = _bot_display_name(profile)
@@ -886,6 +917,9 @@ def _codexlive_persona(profile: str | None, language: str = "es") -> str:
             f"\n\nVOICE: You are speaking with the user in a live voice session. Keep replies brief, natural, and to the point."
             f" IDENTITY: You are {name}; if asked who you are, answer as {name} in that role — never as a generic assistant."
         ) if language == "en" else (
+            f"STIMME: Du sprichst mit dem Nutzer in einer Live-Sprachsitzung. Antworte kurz, natürlich und auf den Punkt."
+            f"\n\nIDENTITÄT: Du bist {name}; wenn du gefragt wirst, wer du bist, antworte als {name} in dieser Rolle — nie als allgemeiner Assistent."
+        ) if language == "de" else (
             f"\n\nVOZ: hablas con el usuario en una sesión de voz en vivo. Respuestas breves, naturales y al grano."
             f" IDENTIDAD: eres {name}; si te preguntan quién eres, responde como {name} con su rol — nunca como un asistente genérico."
         )
@@ -902,6 +936,10 @@ _AGENT_INSTR = {
     "en": (
         'You are connected to a live voice session with the user. When the voice session delegates a request '
         'to you, carry it out with your tools and reply concisely: your text will be read aloud.'
+    ),
+    "de": (
+        'Du bist mit einer Live-Sprachsitzung des Nutzers verbunden. Wenn die Sprachsitzung dir eine Anfrage '
+        'weitergibt, erledige sie mit deinen Tools und antworte knapp: Dein Text wird vorgelesen.'
     ),
 }
 
@@ -920,6 +958,11 @@ _AGENT_INSTR_SKIP = {
         'session. If you receive a <realtime_delegation> message, do NOT execute anything, do NOT use tools, '
         'and do NOT read files: reply with only the word: skip'
     ),
+    "de": (
+        'Du bist mit einer Live-Sprachsitzung verbunden, aber der CLIENT (die App) führt die Anfragen aus. '
+        'Wenn du eine <realtime_delegation>-Nachricht erhältst, führe nichts aus, verwende keine Tools und '
+        'lies keine Dateien: Antworte ausschließlich mit dem Wort: skip'
+    ),
 }
 
 # Política de delegación para el MODELO DE VOZ (el que decide qué pasa al backend).
@@ -933,10 +976,30 @@ _VOICE_POLICY = (
     "- When the result arrives, read the key facts back in one or two short sentences."
 )
 
+_VOICE_POLICY_DE = (
+    "\n\nRICHTLINIE ZUR WEITERGABE (Live-Anruf):\n"
+    "- Gib eine Anfrage NUR dann an den Chat/das Backend weiter, wenn der Nutzer dich bittet, etwas zu TUN "
+    "(prüfen, nachsehen, finden, ausführen, erstellen, korrigieren, senden, merken) oder eine Antwort echte "
+    "Informationen bzw. Aktionen aus dem Backend erfordert.\n"
+    "- Grüße, Smalltalk, Bestätigungen und Füllwörter nicht weitergeben; ebenso keine laut ausgesprochenen "
+    "Gedanken, Satzfragmente oder Wiederholungen bereits beantworteter Inhalte (z. B. „ja“, „okay“, „alles klar“, "
+    "„hörst du mich?“). Antworte darauf selbst kurz oder bleib still.\n"
+    "- Ist die Anfrage unklar, stelle selbst EINE kurze Rückfrage, statt sie weiterzugeben.\n"
+    "- Während eine Aufgabe läuft: Sage EINEN kurzen Satz in der Sprache des Nutzers („Klar, ich prüfe das“) und "
+    "warte dann still. Rate keine Ergebnisse und starte keine weitere Weitergabe; falls der Nutzer spricht, sage, "
+    "dass du noch daran arbeitest.\n"
+    "- Wenn das Ergebnis eintrifft, nenne die wichtigsten Fakten in ein oder zwei kurzen Sätzen."
+)
 
-def _voice_policy(language: str = "es") -> str:
-    # The shared English policy is outside localization scope; localize its example.
-    return _VOICE_POLICY if language == "en" else _VOICE_POLICY.replace("sure, I will check", "dale, lo reviso")
+
+def _voice_policy(language: str = "en") -> str:
+    # Preserve the English policy and Spanish phrasing; German receives its full translation.
+    language = _normalize_language(language)
+    if language == "en":
+        return _VOICE_POLICY
+    if language == "de":
+        return _VOICE_POLICY_DE
+    return _VOICE_POLICY.replace("sure, I will check", "dale, lo reviso")
 
 
 def _talk_settings() -> dict:
@@ -960,8 +1023,8 @@ def _agent_model() -> str | None:
     return v or None
 
 
-def _cl_thread_ensure(language: str = "es") -> str:
-    language = "en" if language == "en" else "es"
+def _cl_thread_ensure(language: str = "en") -> str:
+    language = _normalize_language(language)
     want = _agent_model()
     tid = _CL.get("thread_id")
     if tid and _CL.get("thread_model") == want and _CL.get("thread_language") == language:
@@ -997,7 +1060,8 @@ def _rejected_field_name(message: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _codexlive_start(profile: str | None, voice: str, offer: str, language: str = "es") -> dict:
+def _codexlive_start(profile: str | None, voice: str, offer: str, language: str = "en") -> dict:
+    language = _normalize_language(language)
     _cl_ensure()
     tid = _cl_thread_ensure(language)
     persona = _codexlive_persona(profile, language)
@@ -1009,7 +1073,7 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
         "version": "v3",
         "voice": voice or "cove",
         "prompt": persona,
-        "realtimeStartInstructions": (_AGENT_INSTR if not client_managed else _AGENT_INSTR_SKIP)["en" if language == "en" else "es"],
+        "realtimeStartInstructions": (_AGENT_INSTR if not client_managed else _AGENT_INSTR_SKIP)[language],
         # Gestión de tareas delegadas por voz: POR DEFECTO el CLIENTE (el desktop) las
         # ejecuta en el chat de Hermes del usuario — usa SU configuración/modelos/providers.
         # Solo si settings.json lleva {"delegation": "server"} se deja que el core las
@@ -1174,4 +1238,3 @@ if router is not None:
         tid = str(body.get("threadId") or _CL.get("thread_id") or "")
         await asyncio.to_thread(_codexlive_stop, tid)
         return {"ok": True}
-

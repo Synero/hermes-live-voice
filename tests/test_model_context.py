@@ -40,7 +40,7 @@ def test_tool_adapter_signature_compatibility(localized, language):
 
 def constants():
     tree = ast.parse(PLUGIN_API.read_text())
-    names = {'_LANGUAGE_DIRECTIVE_DEFAULT', '_AGENT_INSTR', '_AGENT_INSTR_SKIP', '_VOICE_POLICY'}
+    names = {'_LANGUAGE_DIRECTIVE_DEFAULT', '_AGENT_INSTR', '_AGENT_INSTR_SKIP', '_VOICE_POLICY', '_VOICE_POLICY_DE'}
     result = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
             if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
             and n.targets[0].id in names}
@@ -80,7 +80,7 @@ def test_language_directive_default_file_and_user_override(tmp_path, language):
 
 @pytest.mark.parametrize('profile', [None, 'example-bot'])
 @pytest.mark.parametrize('allow_chat', [False, True])
-@pytest.mark.parametrize('language', [None, 'es', 'en'])
+@pytest.mark.parametrize('language', [None, 'es', 'en', 'de'])
 def test_constructed_voice_prompts(profile, allow_chat, language):
     sections = {'PERSONA': 'Soy un bot de prueba.', 'MEMORY': 'El usuario vive en Chile.'}
     ns = load_unit(PLUGIN_API, '_mint_for')
@@ -106,22 +106,29 @@ def test_constructed_voice_prompts(profile, allow_chat, language):
     ns['_send_to_chat_tool'].__globals__['_SEND_TO_CHAT_DESC'] = 'Send work to the chat.'
     ns['_mint_for'](profile, 'marin', allow_chat, language)
     prompt = captured['instructions']
-    assert (('VOICE + CHAT:' if language == 'en' else 'VOZ + CHAT:') in prompt) == allow_chat
+    assert (({'en': 'VOICE + CHAT:', 'de': 'SPRACHE + CHAT:'}.get(language or 'en', 'VOZ + CHAT:')) in prompt) == allow_chat
     if allow_chat:
-        assert ('complete request phrased naturally in their language' if language == 'en' else 'petición completa y natural en su idioma') in prompt
-    assert ('LANGUAGE AND VOICE:' if language == 'en' else 'IDIOMA Y VOZ:') in prompt
-    assert 'Do NOT delegate greetings' in prompt
+        assert ('complete request phrased naturally in their language' if language in ('en', None) else 'vollständigen Anfrage in seiner Sprache' if language == 'de' else 'petición completa y natural en su idioma') in prompt
+        if language == 'de':
+            assert '\n\nSPRACHE + CHAT:' in prompt
+    assert ({'en': 'LANGUAGE AND VOICE:', 'de': 'SPRACHE UND STIMME:'}.get(language or 'en', 'IDIOMA Y VOZ:')) in prompt
+    if language == 'de':
+        assert 'Grüße, Smalltalk, Bestätigungen und Füllwörter nicht weitergeben' in prompt
+    else:
+        assert 'Do NOT delegate greetings' in prompt
     assert all(text in prompt for text in sections.values())
     persona = load_unit(PLUGIN_API, '_codexlive_persona')
     persona.update(ns)
     prompt = persona['_codexlive_persona'](profile, language)
-    assert ('VOICE: You are speaking' if language == 'en' else 'VOZ: hablas') in prompt
-    assert ('IDENTITY: You are ' if language == 'en' else 'IDENTIDAD: eres ') + ('Example Bot' if profile else 'Host Bot') in prompt
+    assert ({'en': 'VOICE: You are speaking', 'de': 'STIMME: Du sprichst'}.get(language or 'en', 'VOZ: hablas')) in prompt
+    assert ({'en': 'IDENTITY: You are ', 'de': 'IDENTITÄT: Du bist '}.get(language or 'en', 'IDENTIDAD: eres ') + ('Example Bot' if profile else 'Host Bot')) in prompt
+    if language == 'de':
+        assert '\n\nIDENTITÄT: Du bist ' in prompt
     assert all(text in prompt for text in sections.values())
 
 
 @pytest.mark.parametrize('mode', ['client', 'server'])
-@pytest.mark.parametrize('language', [None, 'es', 'en'])
+@pytest.mark.parametrize('language', [None, 'es', 'en', 'de'])
 def test_codex_start_sends_localized_delegation_instructions(mode, language):
     ns = load_unit(PLUGIN_API, '_codexlive_start')
     ns.update(constants())
@@ -139,15 +146,15 @@ def test_codex_start_sends_localized_delegation_instructions(mode, language):
     ns['_cl_request'] = request
     ns['_codexlive_start'](None, 'cove', 'stub', language)
     instruction = captured['realtimeStartInstructions']
-    assert instruction.startswith('You are connected to a live voice session' if language == 'en' else 'Estás conectado a una sesión de voz en vivo')
+    assert instruction.startswith({'en': 'You are connected to a live voice session', 'de': 'Du bist mit einer Live-Sprachsitzung'}.get(language or 'en', 'Estás conectado a una sesión de voz en vivo'))
     if mode == 'client':
         assert '<realtime_delegation>' in instruction
-        assert ('do NOT read files: reply with only the word: skip' if language == 'en' else 'NO leas archivos: responde únicamente la palabra: skip') in instruction
+        assert ({'en': 'do NOT read files: reply with only the word: skip', 'de': 'verwende keine Tools'}.get(language or 'en', 'NO leas archivos: responde únicamente la palabra: skip')) in instruction
     else:
-        assert ('carry it out with your tools' if language == 'en' else 'actúala con tus herramientas') in instruction
+        assert ({'en': 'carry it out with your tools', 'de': 'erledige sie mit deinen Tools'}.get(language or 'en', 'actúala con tus herramientas')) in instruction
 
 
-@pytest.mark.parametrize('language', [None, 'es', 'en'])
+@pytest.mark.parametrize('language', [None, 'es', 'en', 'de'])
 def test_tool_timeout_and_dynamic_output(language):
     ns = load_unit(PLUGIN_API, 'run_tool')
     output = 'Resultado original en español.'
@@ -167,9 +174,9 @@ def test_tool_timeout_and_dynamic_output(language):
 
     assert asyncio.run(ns['run_tool'](Request()))['output'] == output
     output = None
-    assert asyncio.run(ns['run_tool'](Request()))['output'].startswith('The tool example is still running;' if language == 'en' else 'La herramienta example sigue corriendo;')
+    assert asyncio.run(ns['run_tool'](Request()))['output'].startswith({'en': 'The tool example is still running;', 'de': 'Das Tool example läuft noch;'}.get(language or 'en', 'La herramienta example sigue corriendo;'))
     tools = vendor_module('talk_tools')
-    with pytest.raises(tools.TalkToolError, match="the voice tool 'example' is not available" if language == "en" else "la tool de voz 'example' no está disponible"):
+    with pytest.raises(tools.TalkToolError, match={'en': "the voice tool 'example' is not available", 'de': "Das Sprach-Tool 'example' ist in dieser Installation nicht verfügbar"}.get(language or 'en', "la tool de voz 'example' no está disponible")):
         tools.execute_talk_tool('example', {}, language)
 
 
@@ -181,8 +188,10 @@ def test_desktop_model_messages(english):
     preview = source[source.index('  const phrase ='):source.index('  const url = await new Promise', source.index('  const phrase ='))]
     script = r'''
 const assert = require('node:assert/strict');
-const EN = EN_VALUE;
-const tr = (es, en) => EN ? en : es;
+const LANGUAGE = EN_VALUE ? 'en' : 'es';
+const EN = LANGUAGE === 'en';
+const DE = {};
+const tr = (es, en, de) => LANGUAGE === 'de' ? (de || en) : (EN ? en : es);
 let _delegating = null, _delegBusy = false, _delegQueue = null;
 let handoffMode = 'client';
 const transcript = [], pushTranscript = () => {}, KEY_CHAT = 'chat';
@@ -312,9 +321,40 @@ def test_codex_thread_reuse_includes_language():
         return {'thread': {'id': str(len(calls))}}
     ns.update(_CL={}, _agent_model=lambda: None, Path=Path, _cl_request=request)
     ensure = ns['_cl_thread_ensure']
-    assert ensure() == ensure('es') == '1'
-    assert ensure('en') == ensure('en') == '2'
-    assert ensure('es') == '3'
+    assert ensure() == ensure('en') == '1'
+    assert ensure('es') == '2'
+    assert ensure('en') == '3'
+
+
+def test_german_directive_and_voice_policy_are_localized(tmp_path):
+    ns = load_unit(PLUGIN_API, '_language_directive')
+    ns.update(constants(), _DIRECTIVE_PATH=tmp_path / 'directive.txt')
+    german = ns['_language_directive']('de')
+    assert 'SPRACHE UND STIMME:' in german
+    policy = load_unit(PLUGIN_API, '_voice_policy')
+    policy.update(constants())
+    assert 'ich prüfe das' in policy['_voice_policy']('de')
+    assert 'Smalltalk, Bestätigungen und Füllwörter nicht weitergeben' in policy['_voice_policy']('de')
+    custom = '  Meine Spracheinstellung bleibt exakt.\n'
+    ns['_DIRECTIVE_PATH'].write_text(custom)
+    assert ns['_language_directive']('de') == '\n\n' + custom
+
+
+@pytest.mark.parametrize(('language', 'expected'), [
+    ('de', 'de'), ('de-DE', 'de'), ('de_AT', 'de'), ('es-ES', 'es'), ('fr-FR', 'en'),
+    ('default', 'en'), ('desktop', 'en'), ('esperanto', 'en'), (None, 'en'),
+])
+def test_codex_threads_normalize_language(language, expected):
+    from pathlib import Path
+    ns = load_unit(PLUGIN_API, '_cl_thread_ensure')
+    calls = []
+    def request(method, body, **kwargs):
+        calls.append(body)
+        return {'thread': {'id': str(len(calls))}}
+    ns.update(_CL={}, _agent_model=lambda: None, Path=Path, _cl_request=request)
+    ensure = ns['_cl_thread_ensure']
+    assert ensure(language) == str(len(calls))
+    assert ns['_CL']['thread_language'] == expected
 
 
 @pytest.mark.parametrize('english', [False, True])
@@ -324,15 +364,54 @@ def test_desktop_session_request_bodies(english):
     # Evaluate every production session request body, including preview's Codex path.
     bodies = re.findall(r"ctx.rest\('/(?:codexlive/)?session',\s*\{\s*method: 'POST',\s*body: (\{[^\n]+?\}),", source)
     assert len(bodies) == 3
-    script = 'const assert = require("node:assert/strict"); const EN = ' + str(english).lower() + ';'
+    script = 'const assert = require("node:assert/strict"); const LANGUAGE = ' + repr('en' if english else 'es') + ';'
     script += 'const profile = null, voice = "cove", offer = {sdp: "stub"}, allowChat = true;'
     for body in bodies:
-        script += f'assert.equal(({body}).language, EN ? "en" : "es");'
+        script += f'assert.equal(({body}).language, LANGUAGE);'
     result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize('language', [None, 'es', 'en'])
+def test_codex_schema_backed_voices_are_opt_in_and_keep_existing_defaults():
+    """Schema-backed IDs round-trip only for Codex; defaults and stable lists stay unchanged."""
+    import re
+    source = (REPO / 'desktop/plugin.js').read_text()
+    match = re.search(r"const V3_VOICES = .*?\nconst SENTINEL_DEFAULT", source, re.S)
+    assert match, 'Codex voice selection definitions not found'
+    script = 'const assert = require("node:assert/strict"); const tr = (es, en) => en;\nconst VOICES = ["marin", "cedar", "alloy", "echo", "shimmer", "verse", "sage", "ballad"];\n'
+    script += match.group(0).replace('\nconst SENTINEL_DEFAULT', '\n')
+    script += '''
+const expectedVoiceLanguages = {
+  aube: ['Aube', 'Français'], bubbie: ['Bubbie', 'English'],
+  haetsal: ['Haetsal', '한국어'], hanul: ['Hanul', '한국어'], himari: ['Himari', '日本語'],
+  leher: ['Leher', 'हिन्दी'], miko: ['Miko', 'Deutsch'], neer: ['Neer', 'हिन्दी'],
+  rindo: ['Rindo', '日本語'], rio: ['Rio', 'Português (Brasil)'],
+  rivage: ['Rivage', 'Français'], sonna: ['Sonna', 'Deutsch'],
+  tinta: ['Tinta', 'Español (México)'], viola: ['Viola', 'Português (Brasil)']
+};
+const expectedExperimental = Object.keys(expectedVoiceLanguages);
+assert.deepEqual([...new Set(V3_EXPERIMENTAL_VOICES)].sort(), [...expectedExperimental].sort());
+assert.deepEqual(Object.keys(V3_EXPERIMENTAL_LABELS).sort(), [...expectedExperimental].sort());
+assert.equal(V3_EXPERIMENTAL_VOICES.length, expectedExperimental.length);
+assert.equal(new Set([...V3_VOICES, ...V3_EXPERIMENTAL_VOICES]).size, V3_VOICES.length + V3_EXPERIMENTAL_VOICES.length);
+for (const [voice, [name, language]] of Object.entries(expectedVoiceLanguages)) {
+  assert.equal(effVoiceFor('codex', voice), voice);
+  assert.equal(voiceOptionLabel(voice), name);
+  assert.equal(effVoiceFor('hermes', voice), 'marin');
+}
+assert.equal(effVoiceFor('codex', 'cove'), 'cove');
+assert.equal(effVoiceFor('codex', 'unknown'), 'cove');
+assert.equal(effVoiceFor('codex', 'arrullo'), 'cove');
+assert.equal(effVoiceFor('hermes', 'miko'), 'marin');
+assert.equal(voiceOptionLabel('cove'), 'Cove');
+assert.deepEqual(V3_VOICES, ['cove', 'juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol']);
+assert.deepEqual(VOICES, ['marin', 'cedar', 'alloy', 'echo', 'shimmer', 'verse', 'sage', 'ballad']);
+'''
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('language', [None, 'es', 'en', 'de'])
 def test_tool_route_localizes_unavailable_error(language):
     ns = load_unit(PLUGIN_API, 'run_tool')
     class HTTPException(Exception):
@@ -344,4 +423,4 @@ def test_tool_route_localizes_unavailable_error(language):
             return {'name': 'probe', 'language': language}
     with pytest.raises(HTTPException) as exc:
         asyncio.run(ns['run_tool'](Request()))
-    assert ('the voice tool' if language == 'en' else 'la tool de voz') in exc.value.detail
+    assert ({'en': 'the voice tool', 'de': 'Das Sprach-Tool'}.get(language or 'en', 'la tool de voz')) in exc.value.detail
