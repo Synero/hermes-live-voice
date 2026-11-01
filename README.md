@@ -112,6 +112,11 @@ The desktop app discovers the desktop half from the plugin folder
 |---|---|---|---|
 | `codexAgentModel` | a ChatGPT-valid Codex model slug (e.g. `gpt-5.6-sol`) | *(unset)* | Model forced for the delegated **server agent** thread. Needed only when the machine's default Codex model is not ChatGPT-valid (e.g. a custom provider proxy). |
 | `delegation` | `client` · `server` | `client` | Who runs voice-delegated tasks. **`client`** = the tasks run in your focused Hermes chat (your config/providers — recommended, nothing is sent to the ChatGPT lane). **`server`** = tasks run in a Codex agent thread on the backend (advanced/opt-in). |
+| `liveModel` | `gpt-live-1-codex` · `gpt-live-1.1` | `gpt-live-1-codex` | Codex subscription Realtime model. **1.1 is opt-in**, requires a Codex app-server supporting it, and does not silently fall back if unavailable. Desktop and headless sessions use the same selection. |
+
+### Headless sessions (external audio clients)
+
+An optional **local stdio session interface** allows an external WebRTC client to reuse the plugin's Codex subscription authentication/session negotiation while keeping audio transport, task execution, and approvals in its own host. See [the headless session contract](docs/headless-session-interface.md). This is not a new HTTP listener or a second agent runtime. It requires `delegation: "client"` and isolates the silent Codex handoff thread from tools.
 
 ## Troubleshooting
 
@@ -180,6 +185,8 @@ Live Voice implementation and the protocol documentation are included here for r
 integration work.
 
 ## Changelog
+
+- **Unreleased** — opt-in `gpt-live-1.1` subscription model selection and a versioned, local-only headless stdio session interface for third-party audio transports. The default Live-1 experience and existing Desktop endpoints are unchanged; headless client mode fences the hidden Codex thread from tool execution.
 
 - **0.2.6** — the plugin no longer holds, refreshes or rewrites a Codex token ([#20](https://github.com/Synero/hermes-live-voice/issues/20)). On the ChatGPT-subscription lane Hermes signs the Realtime client-secret request itself (`credentialed_provider_request`, NousResearch/hermes-agent#136117) with its own locked refresh, the plan usage panel reads Hermes's read-only `fetch_account_usage`, and "Sign out" no longer deletes `~/.codex/auth.json` (it points at `hermes auth logout openai-codex`). The bundled `talk_auth` is pinned in-process so an installed `hermes-talk` cannot add a second refresher. `plugin.yaml` now declares `requires_auth: [openai-codex]` and needs Hermes `>=0.21.7`. API-key lanes and the gpt-live-1 app-server lane are unchanged. **Why it matters:** Codex refresh tokens are single-use, so two refreshers racing signed users out of Hermes and the Codex CLI.
 - **0.2.5** — no bot name is hardcoded any more: when no bot profile is chosen the voice identity uses the host `agent.name` from config, falling back to "Hermes" ([#16](https://github.com/Synero/hermes-live-voice/pull/16)); the "[voice] reply briefly" note no longer shows up inside the chat bubble on hosts that support the voice-live surface, it only reaches the model ([#17](https://github.com/Synero/hermes-live-voice/pull/17)); README now has a real demo recording and screenshots ([#18](https://github.com/Synero/hermes-live-voice/pull/18)).
