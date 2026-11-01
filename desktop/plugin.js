@@ -1204,7 +1204,7 @@ function ConfigForm({ ctx, dense = false }) {
       jsxs(Select, { value: engine, onValueChange: setEngine, children: [
         jsx(SelectTrigger, { style: trigStyle, children: jsx(SelectValue, { style: valStyle }) }),
         jsxs(SelectContent, { children: [
-          jsx(SelectItem, { value: 'codex', children: opt('Codex Live-1 (gpt-live-1)') }),
+          jsx(SelectItem, { value: 'codex', children: opt('Codex Live (ChatGPT subscription)') }),
           jsx(SelectItem, { value: 'hermes', children: opt('Hermes (gpt-realtime-2.1)') })
         ] })
       ] }),

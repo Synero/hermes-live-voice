@@ -884,11 +884,23 @@ def _cl_ensure() -> None:
     # clave: la lane de voz usa la SUSCRIPCIÓN (auth.json), no una API key de entorno
     env.pop("OPENAI_API_KEY", None)
     env.pop("CODEX_API_KEY", None)
+    args = [binary, "app-server", "--listen", "stdio://",
+            "--enable", "realtime_conversation",
+            "-c", "model_provider=openai",
+            "-c", "suppress_unstable_features_warning=true"]
+    if os.environ.get("TALK_DESKTOP_HEADLESS_CLIENT_ONLY") == "1":
+        # An external audio client delegates work to Hermes, not this hidden
+        # Codex thread. Keep the existing desktop/server delegation lane intact.
+        args += ["-c", "features.apps=false",
+                 "-c", "features.shell_tool=false",
+                 "-c", "features.multi_agent=false",
+                 "-c", "features.plugins=false",
+                 "-c", "features.browser_use=false",
+                 "-c", "features.computer_use=false",
+                 "-c", 'web_search="disabled"',
+                 "-c", "tools.view_image=false"]
     proc = subprocess.Popen(
-        [binary, "app-server", "--listen", "stdio://",
-         "--enable", "realtime_conversation",
-         "-c", "model_provider=openai",
-         "-c", "suppress_unstable_features_warning=true"],
+        args,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, bufsize=1, env=env,
     )
@@ -1030,6 +1042,23 @@ def _cl_thread_ensure(language: str = "en") -> str:
     if tid and _CL.get("thread_model") == want and _CL.get("thread_language") == language:
         return tid
     body = {"cwd": str(Path.home()), "modelProvider": "openai"}
+    # Keep this import local so standalone test harnesses that extract only
+    # _cl_thread_ensure retain its documented behavior.
+    import os as _os
+    if _os.environ.get("TALK_DESKTOP_HEADLESS_CLIENT_ONLY") == "1":
+        # A client-managed audio adapter must not silently execute delegated
+        # tools in the hidden Codex thread: Hermes owns its tool approvals.
+        body.update({
+            "ephemeral": True,
+            "sandbox": "read-only",
+            "approvalPolicy": "untrusted",
+            "environments": [],
+            "developerInstructions": (
+                "You are a silent voice handoff relay. The external Hermes "
+                "client performs all real work. Never run tools, browse, "
+                "execute commands or read files. Reply only: skip."
+            ),
+        })
     if want:
         body["model"] = want
     th = _cl_request("thread/start", body, timeout=30)
@@ -1062,10 +1091,15 @@ def _rejected_field_name(message: str) -> str | None:
 
 def _codexlive_start(profile: str | None, voice: str, offer: str, language: str = "en") -> dict:
     language = _normalize_language(language)
+    settings = _talk_settings()
+    live_model = str(settings.get("liveModel") or "gpt-live-1-codex").strip()
+    if live_model not in {"gpt-live-1-codex", "gpt-live-1.1"}:
+        # Fail before launching Codex or creating a hidden thread.
+        raise ValueError("Unsupported Codex subscription Live model")
+    client_managed = str(settings.get("delegation") or "client").strip().lower() != "server"
     _cl_ensure()
     tid = _cl_thread_ensure(language)
     persona = _codexlive_persona(profile, language)
-    client_managed = str(_talk_settings().get("delegation") or "client").strip().lower() != "server"
     params = {
         "threadId": tid,
         "transport": {"type": "webrtc", "sdp": offer},
@@ -1081,6 +1115,10 @@ def _codexlive_start(profile: str | None, voice: str, offer: str, language: str 
         "clientManagedHandoffs": client_managed,
         "delegationAckFiller": True,
     }
+    # Preserve existing Codex Live-1 requests. Opting in to 1.1 requires an
+    # explicit model argument, and unsupported versions must fail closed.
+    if live_model != "gpt-live-1-codex":
+        params["model"] = live_model
     dropped: list[str] = []
     start = len(_CL["notifs"])
     while True:
