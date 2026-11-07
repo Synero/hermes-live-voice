@@ -673,18 +673,38 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
   let audioEl = null
   pc.ontrack = ev => {
     log('audio del bot conectado')
-    const remoteStream = ev.streams[0]
-    audioEl = new Audio()
+    // The realtime answer can deliver the track with an EMPTY streams[] array,
+    // so ev.streams[0] is undefined and the element would play silence while the
+    // transcript keeps working over the data channel. Fall back to the track.
+    const remoteStream = (ev.streams && ev.streams[0]) || new MediaStream([ev.track])
+    if (!audioEl) {
+      audioEl = new Audio()
+      audioEl.autoplay = true
+      audioEl.playsInline = true
+      try { audioEl.setAttribute('playsinline', '') } catch {}
+      audioEl.style.display = 'none'
+      // A detached media element can be throttled; keep it in the document.
+      try { document.body.appendChild(audioEl) } catch {}
+      if (_liveRefs) _liveRefs.audioEl = audioEl
+    }
     audioEl.srcObject = remoteStream
-    audioEl.autoplay = true
-    audioEl.play().catch(() => log('click para reproducir audio'))
-  if (_liveRefs) _liveRefs.audioEl = audioEl
-    if (outId && audioEl.setSinkId) audioEl.setSinkId(outId).catch(e => log('salida: ' + e.message))
-    const an = audioCtx.createAnalyser(); an.fftSize = 256
-    const src = audioCtx.createMediaStreamSource(remoteStream)
-    const mute = audioCtx.createGain(); mute.gain.value = 0
-    src.connect(an); an.connect(mute); mute.connect(audioCtx.destination)
-    remoteRef.an = an
+    audioEl.play().catch(err => {
+      log('audio bloqueado: ' + ((err && err.message) || err))
+      pushTranscript('sys', tr('Toca para activar el audio', 'Tap to enable audio', 'Tippen, um Audio zu aktivieren'))
+    })
+    // In a browser setSinkId needs speaker-selection permission and a device id
+    // that still exists (ids change on USB/HDMI re-enumeration); a rejection
+    // must not break playback.
+    if (outId && typeof audioEl.setSinkId === 'function') {
+      audioEl.setSinkId(outId).catch(e => log('salida: ' + e.message))
+    }
+    try {
+      const an = audioCtx.createAnalyser(); an.fftSize = 256
+      const src = audioCtx.createMediaStreamSource(remoteStream)
+      const mute = audioCtx.createGain(); mute.gain.value = 0
+      src.connect(an); an.connect(mute); mute.connect(audioCtx.destination)
+      remoteRef.an = an
+    } catch (e) { log('analyser: ' + ((e && e.message) || e)) }
   }
 
   let closed = false
