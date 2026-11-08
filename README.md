@@ -42,6 +42,7 @@ for the voice lane.
 - 📝 **Live transcript** — iMessage-style bubbles (you / bot), streaming deltas, tool activity chips.
 - 🛠️ **Tools from voice** — the model can run tasks: by default they are delegated into your **focused Hermes chat**, i.e. your own agent with **your** models and providers. A voice-side delegation policy keeps this clean (only real task requests are delegated, fillers stay conversational) and an internal queue prevents overlapping runs. An opt-in server-agent mode also exists.
 - 🎚️ **Audio & call controls** — device pickers, built-in mic test, one-tap **mute** and hang-up right in the composer.
+- [Wake on sound](docs/wake-on-sound.md), an optional local microphone monitor, OFF by default. Noise can start a billable call; triggering audio is not buffered or transcribed.
 - 📊 **Usage panels** — measured voice minutes (rolling windows) and the Codex plan bucket.
 
 <table>

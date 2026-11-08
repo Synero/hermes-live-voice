@@ -193,11 +193,14 @@ const EN = LANGUAGE === 'en';
 const DE = {};
 const tr = (es, en, de) => LANGUAGE === 'de' ? (de || en) : (EN ? en : es);
 let _delegating = null, _delegBusy = false, _delegQueue = null;
+const _delegWaiters = new Set(), bus = {live: true};
+let _disposed = false;
 let handoffMode = 'client';
 const transcript = [], pushTranscript = () => {}, KEY_CHAT = 'chat';
 let now = 1000000;
 Date.now = () => now;
-const sleep = async () => { now += 300000; };
+const setTimeout = callback => { now += 300000; queueMicrotask(callback); return 1; };
+const clearTimeout = () => {};
 const handlers = {};
 let completion = 'Resultado en español.', submitted, submittedSurface, legacyHost = false;
 const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
@@ -210,7 +213,7 @@ const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
   else if (completion !== null) handlers['message.complete']({text: completion});
 }};
 const messages = [];
-const dc = {send: data => messages.push(JSON.parse(data))};
+const dc = {readyState: 'open', send: data => messages.push(JSON.parse(data))};
 const ctx = {storage: {get: () => '1'}};
 const lastText = () => messages.at(-1).content[0].text;
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };

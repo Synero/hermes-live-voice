@@ -81,6 +81,11 @@ const LANGUAGE = (() => {
 })()
 const EN = LANGUAGE === 'en'
 const DE = {
+  'Wake on sound': 'Bei Geräuschen aktivieren',
+  'Local listening': 'Lokales Mithören',
+  'Could not start local listening: ': 'Lokales Mithören konnte nicht gestartet werden: ',
+  'Local mic listening is on. Turn off "Wake on sound" to stop monitoring.': 'Lokales Mikrofon ist aktiv. Deaktiviere "Bei Geräuschen aktivieren", um das Mithören zu beenden.',
+  'Off by default. Monitors the mic locally while the call is off, without sending audio. Noise can start a billable call. Triggering audio is not buffered or transcribed. Calls never hang up automatically.': 'Standardmäßig aus. Überwacht das Mikrofon lokal ohne Audioübertragung, wenn kein Anruf läuft. Geräusche können einen kostenpflichtigen Anruf starten. Auslösendes Audio wird nicht gepuffert oder transkribiert. Anrufe enden nicht automatisch.',
   'Weekly': 'Woche',
   'The language label describes the voice’s regional focus, not its only supported language.': 'Die Sprachangabe beschreibt die regionale Ausrichtung der Stimme, nicht ihre einzige unterstützte Sprache.',
   'The sign-in code expired before approval.': 'Der Anmeldecode ist vor der Bestätigung abgelaufen.',
@@ -264,8 +269,8 @@ function endBotTranscript(finalText) {
 }
 function clearTranscript() { transcript = []; _bumpTranscript() }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 let _delegating = null
+const _delegWaiters = new Set()
 
 // Voz → Chat: envía la petición al chat ENFOCADO (el agente real responde ahí,
 // streaming visible en la ventana) y devuelve el texto de la respuesta para leerlo.
@@ -293,6 +298,13 @@ async function delegateToChat(text) {
   let finalText = ''
   let errText = ''
   const unsubs = []
+  let stopWait = null
+  const cancelWait = () => {
+    settled = true
+    for (const u of unsubs) { try { u() } catch {} }
+    if (stopWait) stopWait()
+  }
+  _delegWaiters.add(cancelWait)
   try {
     try {
       if (host && typeof host.onEvent === 'function') {
@@ -328,11 +340,15 @@ async function delegateToChat(text) {
       return tr('No se pudo enviar al chat: ', 'Could not send to the chat: ') + String((e && e.message) || e || 'error')
     }
     const t0 = Date.now()
-    while (!settled && Date.now() - t0 < 240000) await sleep(300)
+    while (!settled && Date.now() - t0 < 240000) await new Promise(resolve => {
+      const timer = setTimeout(() => { stopWait = null; resolve() }, 300)
+      stopWait = () => { clearTimeout(timer); stopWait = null; resolve() }
+    })
     if (!settled) return tr('El agente sigue trabajando en el chat; avísale al usuario que la respuesta aparecerá ahí en un momento.', 'The agent is still working in the chat; tell the user the response will appear there shortly.')
     const out = (errText || finalText || acc).trim()
     return out ? out.slice(0, 4000) : tr('El agente terminó sin texto visible.', 'The agent finished without visible text.')
   } finally {
+    _delegWaiters.delete(cancelWait)
     _delegating = null
     for (const u of unsubs) { try { u() } catch {} }
   }
@@ -389,6 +405,7 @@ function _plainForVoice(t) {
 }
 
 function _delegRespond(dc, itemId, text) {
+  if (!bus.live || !dc || dc.readyState !== 'open') return
   try {
     dc.send(JSON.stringify({ type: 'delegation.context.append', delegation_item_id: itemId,
       content: [{ type: 'input_text', text: String(text || '').slice(0, 3500) }] }))
@@ -438,6 +455,7 @@ function _runDelegation(ctx, dc, itemId, req) {
   ;(async () => {
     let out = ''
     try { out = await delegateToChat(req) } catch (e) { out = '' }
+    if (_disposed) return
     out = String(out || '').trim()
     if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
     const forVoice = _plainForVoice(out)
@@ -569,6 +587,7 @@ function disposeLoop(loop) { try { loop && loop.dispose && loop.dispose() } catc
 
 // ── sonidos de micro-interacción (WebAudio, sin assets) ──────────────────────
 
+const _chimes = new Map()
 function playChime(kind) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)()
@@ -586,7 +605,8 @@ function playChime(kind) {
       o.start(now + i * 0.08)
       o.stop(now + i * 0.08 + 0.3)
     })
-    setTimeout(() => { try { ctx.close() } catch {} }, 900)
+    const timer = setTimeout(() => { _chimes.delete(ctx); try { ctx.close() } catch {} }, 900)
+    _chimes.set(ctx, timer)
   } catch {}
 }
 
@@ -603,7 +623,50 @@ async function mintSession(ctx, profile, voice, allowChat) {
 }
 
 async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
+  if (_disposed || _startingLive || bus.live) throw new Error('Live Voice unavailable or already starting')
+  _startingLive = true
+  const gen = ++_callGeneration
+  stopWakeListener()
   const eng = engine || 'codex'
+  let stream = null, audioCtx = null, pc = null, dc = null, audioEl = null
+  let statsTimer = null, idleTimer = null, meterLoop = null, codexSession = null
+  let closed = false, connectedAt = 0
+  const ctl = { close: null }
+  ctl.close = () => {
+    if (closed) return
+    closed = true
+    if (!_disposed && bus.stage === 'connected') playChime('hangup')
+    try { clearInterval(statsTimer) } catch {}
+    try { clearInterval(idleTimer) } catch {}
+    try { for (let i = 0; i < transcript.length; i++) transcript[i].done = true } catch {}
+    try { disposeLoop(meterLoop) } catch {}
+    try {
+      const durMs = connectedAt ? Date.now() - connectedAt : 0
+      if (durMs > 4000) {
+        ctx.rest('/voice/usage/report', { method: 'POST', body: { durationMs: Math.round(durMs), audioMs: Math.round(liveAudioMs || 0) }, timeoutMs: 8000 }).catch(() => {})
+      }
+    } catch {}
+    try { if (audioEl) { audioEl.pause(); audioEl.srcObject = null; audioEl.remove() } } catch {}
+    try { stream.getTracks().forEach(t => t.stop()) } catch {}
+    try { if (eng === 'codex' && codexSession && codexSession.threadId) ctx.rest('/codexlive/stop', { method: 'POST', body: { threadId: codexSession.threadId }, timeoutMs: 8000 }).catch(() => {}) } catch {}
+    try { if (dc) { dc.onopen = null; dc.onmessage = null; dc.close() } } catch {}
+    try { if (pc) { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close() } } catch {}
+    try { audioCtx.close() } catch {}
+    if (_activeLiveClose === ctl.close) _activeLiveClose = null
+    _liveRefs = null
+    currentBotTurnId = ''
+    _botSpeakingSince = 0
+    bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, muted: false })
+  }
+  _activeLiveClose = ctl.close
+  const checkCurrent = () => {
+    if (_disposed || gen !== _callGeneration || closed) {
+      try { stream && stream.getTracks().forEach(t => t.stop()) } catch {}
+      try { if (codexSession?.threadId) ctx.rest('/codexlive/stop', { method: 'POST', body: { threadId: codexSession.threadId }, timeoutMs: 8000 }).catch(() => {}) } catch {}
+      throw new Error('Live Voice start cancelled')
+    }
+  }
+  try {
   clearTranscript()
   liveAudioMs = 0
   bus.set({ err: '', widget: true, stage: 'mint' })
@@ -613,13 +676,14 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     sess = await mintSession(ctx, profile, voice, (ctx.storage.get(KEY_CHAT) || '1') !== '0')
     bus.botName = sess.botName || ''
   }
+  checkCurrent()
   log('abriendo micrófono…')
   const audioC = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   if (micId) audioC.deviceId = { exact: micId }
-  let stream
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: audioC })
   } catch (e) {
+    checkCurrent()
     if (micId) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
@@ -631,11 +695,13 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       throw new Error('MIC: ' + (e?.name || '') + tr(' — revisa permisos o prueba otro micrófono en el engranaje', ' — check permissions or try another microphone in the gear menu'))
     }
   }
+  checkCurrent()
   log('mic OK')
   bus.set({ live: true, stage: 'offering', micLevel: 0, remoteLevel: 0 })
 
-  const audioCtx = new AudioContext()
+  audioCtx = new AudioContext()
   if (audioCtx.state === 'suspended') { try { await audioCtx.resume() } catch {} }
+  checkCurrent()
   const analyserMic = audioCtx.createAnalyser(); analyserMic.fftSize = 512
   // grafo de medición: mantiene el analyser alimentado independientemente del destination
   const micMute = audioCtx.createGain(); micMute.gain.value = 0
@@ -657,12 +723,12 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     }
   }
 
-  const pc = new RTCPeerConnection()
+  pc = new RTCPeerConnection()
   stream.getTracks().forEach(t => pc.addTrack(t, stream))
   _liveRefs = { pc, audioEl: null, ctx }
 
   // canal de eventos: transcripción en vivo + llamadas a tools
-  const dc = pc.createDataChannel('oai-events')
+  dc = pc.createDataChannel('oai-events')
   dc.onopen = () => log('canal de eventos abierto')
   dc.onmessage = ev => {
     let msg = null
@@ -670,7 +736,6 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     handleRealtimeEvent(msg, dc, ctx)
   }
 
-  let audioEl = null
   pc.ontrack = ev => {
     log('audio del bot conectado')
     const remoteStream = ev.streams[0]
@@ -687,10 +752,8 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     remoteRef.an = an
   }
 
-  let closed = false
-  let connectedAt = 0
   // cierra bubbles inactivos (2.6s) para separar intervenciones sin duplicar
-  const idleTimer = setInterval(() => {
+  idleTimer = setInterval(() => {
     const now = Date.now()
     let changed = false
     for (let i = 0; i < transcript.length; i++) {
@@ -699,7 +762,6 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
     }
     if (changed) _bumpTranscript()
   }, 1000)
-  const ctl = { close: null }
   // Mute del micrófono: alterna enabled en los tracks de audio del PC (robusto a fallback de device).
   let mutedNow = false
   ctl.toggleMute = () => {
@@ -724,8 +786,9 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
 
   log('negociando…')
   const offer = await pc.createOffer()
+  checkCurrent()
   await pc.setLocalDescription(offer)
-  let codexSession = null
+  checkCurrent()
   if (eng === 'codex') {
     const r2 = await ctx.rest('/codexlive/session', {
       method: 'POST',
@@ -737,6 +800,7 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       throw new Error(tr('codex live: sin SDP de respuesta', 'codex live: no answer SDP'))
     }
     codexSession = r2
+    checkCurrent()
     handoffMode = (r2.handoff === 'server') ? 'server' : 'client'
     bus.botName = r2.botName || bus.botName || ''
     await pc.setRemoteDescription({ type: 'answer', sdp: r2.answer })
@@ -751,12 +815,16 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       stream.getTracks().forEach(t => t.stop())
       throw new Error('offer ' + res.status + ': ' + t.slice(0, 140))
     }
-    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() })
+    checkCurrent()
+    const answer = await res.text()
+    checkCurrent()
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer })
   }
+  checkCurrent()
   log('en vivo')
 
   // poll de niveles WebRTC cada 250ms (audioLevel outbound=mic / inbound=bot)
-  const statsTimer = setInterval(() => {
+  statsTimer = setInterval(() => {
     try {
       pc.getStats().then(report => {
         try {
@@ -821,36 +889,109 @@ async function startLive(ctx, { profile, voice, micId, outId, engine, log }) {
       if (now - lastEmit > 200) { lastEmit = now; bus.emit() }
     }
   }
-  const meterLoop = makeLoop(tick, 24)
+  meterLoop = makeLoop(tick, 24)
 
-  ctl.close = () => {
-    if (closed) return
-    closed = true
-    if (bus.stage === 'connected') playChime('hangup')
-    try { clearInterval(statsTimer) } catch {}
-    try { clearInterval(idleTimer) } catch {}
-    try { for (let i = 0; i < transcript.length; i++) transcript[i].done = true } catch {}
-    try { disposeLoop(meterLoop) } catch {}
-    try {
-      const durMs = connectedAt ? Date.now() - connectedAt : 0
-      if (durMs > 4000) {
-        ctx.rest('/voice/usage/report', { method: 'POST', body: { durationMs: Math.round(durMs), audioMs: Math.round(liveAudioMs || 0) }, timeoutMs: 8000 }).catch(() => {})
-      }
-    } catch {}
-    try { audioEl && audioEl.pause() } catch {}
-    try { stream.getTracks().forEach(t => t.stop()) } catch {}
-    try { if (eng === 'codex' && codexSession && codexSession.threadId) ctx.rest('/codexlive/stop', { method: 'POST', body: { threadId: codexSession.threadId }, timeoutMs: 8000 }).catch(() => {}) } catch {}
-    try { pc.close() } catch {}
-    try { audioCtx.close() } catch {}
-    _liveRefs = null
-    currentBotTurnId = ''
-    _botSpeakingSince = 0
-    bus.set({ live: false, stage: 'idle', micLevel: 0, remoteLevel: 0, widget: false, muted: false })
-  }
   return {
-    close: () => { try { ctl.close && ctl.close() } catch {} },
+    close: () => {
+      if (closed) return
+      ctl.close()
+      armWakeListener(ctx) // Only an explicit manual hangup arms local listening.
+    },
     toggleMute: () => { try { return ctl.toggleMute() } catch {} return false }
   }
+  } catch (e) {
+    ctl.close()
+    throw e
+  } finally {
+    _startingLive = false
+  }
+}
+
+// Local wake monitoring is separate from a live session. It never sends audio.
+// RMS is a sound-level heuristic, not a speech recognizer: noise can wake it.
+const KEY_WAKE = 'wakeOnSound.v1'
+const wakeOnSoundEnabled = ctx => ctx.storage.get(KEY_WAKE) === '1'
+let _wakeProbe = null
+let _probeGeneration = 0
+let _callGeneration = 0
+let _startingLive = false
+let _activeLiveClose = null
+let _disposed = false
+const _wakeOwners = new Set()
+
+function stopWakeListener() {
+  ++_probeGeneration // Invalidate even a getUserMedia request that has not resolved.
+  const p = _wakeProbe
+  _wakeProbe = null
+  if (p) {
+    clearInterval(p.loop)
+    try { p.source && p.source.disconnect() } catch {}
+    try { p.stream && p.stream.getTracks().forEach(t => t.stop()) } catch {}
+    try { p.ac && p.ac.close() } catch {}
+  }
+  if (bus.stage === 'listening') bus.set({ stage: 'idle', micLevel: 0 })
+}
+
+function setWakeOnSound(ctx, enabled) {
+  ctx.storage.set(KEY_WAKE, enabled ? '1' : '0')
+  if (!enabled) stopWakeListener()
+  else armWakeListener(ctx)
+}
+
+async function armWakeListener(ctx) {
+  if (_disposed || !wakeOnSoundEnabled(ctx) || bus.live || _startingLive || _wakeProbe || !_wakeOwners.size) return
+  const gen = ++_probeGeneration
+  const p = { stream: null, ac: null, source: null, loop: null }
+  _wakeProbe = p // Claim ownership BEFORE requesting microphone permission.
+  const valid = () => gen === _probeGeneration && _wakeProbe === p && !_disposed && wakeOnSoundEnabled(ctx) && !bus.live && !_startingLive && _wakeOwners.size
+  try {
+    const micId = ctx.storage.get(KEY_MIC) || ''
+    const audio = { echoCancellation: true, noiseSuppression: true }
+    if (micId) audio.deviceId = { exact: micId }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio })
+    if (!valid()) { stream.getTracks().forEach(t => t.stop()); return }
+    p.stream = stream
+    bus.set({ stage: 'listening', err: '', micLevel: 0 })
+    p.ac = new (window.AudioContext || window.webkitAudioContext)()
+    if (p.ac.state === 'suspended') await p.ac.resume()
+    if (!valid()) return
+    p.source = p.ac.createMediaStreamSource(stream)
+    const an = p.ac.createAnalyser(); an.fftSize = 512
+    p.source.connect(an)
+    const buf = new Uint8Array(an.fftSize)
+    let hits = 0
+    p.loop = setInterval(() => {
+      if (!valid()) { if (_wakeProbe === p) stopWakeListener(); return }
+      try { an.getByteTimeDomainData(buf) } catch { stopWakeListener(); return }
+      let sum = 0
+      for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v }
+      hits = Math.sqrt(sum / buf.length) > 0.045 ? hits + 1 : 0
+      if (hits < 3) return
+      // Release all local resources BEFORE starting an ordinary live call.
+      stopWakeListener()
+      const resume = [..._wakeOwners].pop()
+      if (resume && wakeOnSoundEnabled(ctx) && !_disposed) resume()
+    }, 100)
+  } catch (e) {
+    if (_wakeProbe !== p) return
+    stopWakeListener()
+    bus.set({ err: tr('No se pudo iniciar la escucha local: ', 'Could not start local listening: ') + String(e?.name || e?.message || e).slice(0, 100) })
+  }
+}
+
+function disposeVoice() {
+  _disposed = true
+  ++_callGeneration
+  stopWakeListener()
+  try { _activeLiveClose && _activeLiveClose() } catch {}
+  _activeLiveClose = null
+  _wakeOwners.clear()
+  _delegQueue = null
+  for (const cancel of _delegWaiters) cancel()
+  for (const [ac, timer] of _chimes) { clearTimeout(timer); try { ac.close() } catch {} }
+  _chimes.clear()
+  clearTimeout(_bumpTimer); _bumpTimer = null
+  try { delete window.__talkLiveHandle } catch {}
 }
 
 function useLiveState() {
@@ -1068,6 +1209,7 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
 // ── formulario de configuración (Popover / widget / pane comparten esto) ────
 
 function ConfigForm({ ctx, dense = false }) {
+  const [wakeOnSound, setWakeOnSoundState] = useState(() => wakeOnSoundEnabled(ctx))
   const [voice, setVoice] = useState(() => ctx.storage.get(KEY_VOICE) || 'marin')
   const [profile, setProfile] = useState(() => ctx.storage.get(KEY_PROFILE) || '')
   const [micId, setMicId] = useState(() => ctx.storage.get(KEY_MIC) || '')
@@ -1240,6 +1382,16 @@ function ConfigForm({ ctx, dense = false }) {
         jsx('div', { style: { fontSize: 10, color: 'var(--ui-text-tertiary, #a1a1aa)' }, children: tr('Las tareas se ejecutan en el chat abierto, con sus tools y su modelo (tu config de Hermes). La voz no ejecuta nada por su cuenta.', 'Tasks run in the open chat with its tools and model (your Hermes config). The voice never runs anything on its own.') }),
       ] })
     ] }),
+    jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }, children: [
+      jsx('div', { style: label, children: tr('Activar con sonido', 'Wake on sound') }),
+      jsx(Switch, { checked: wakeOnSound, 'aria-label': tr('Activar con sonido', 'Wake on sound'), onCheckedChange: enabled => {
+        setWakeOnSound(ctx, enabled)
+        setWakeOnSoundState(enabled)
+      } })
+    ] }),
+    jsx('div', { style: { fontSize: 11, color: 'var(--ui-text-secondary)', marginBottom: 8 }, children: tr(
+      'Desactivado por defecto. Escucha el micrófono localmente con la llamada apagada, sin enviar audio. El ruido puede iniciar una llamada de pago. El audio que la activa no se guarda ni transcribe. Las llamadas no se cuelgan solas.',
+      'Off by default. Monitors the mic locally while the call is off, without sending audio. Noise can start a billable call. Triggering audio is not buffered or transcribed. Calls never hang up automatically.') }),
     jsx('div', { style: { ...label, marginTop: 6, marginBottom: 6, borderTop: '1px solid var(--ui-stroke-secondary, rgba(127,127,127,0.25))', paddingTop: 8 }, children: tr('Audio', 'Audio') }),
     jsxs('div', { style: field, children: [
       jsx('div', { style: label, children: tr('Micrófono', 'Microphone') }),
@@ -1634,15 +1786,15 @@ function ComposerLiveButton({ ctx }) {
   }, [])
 
   const toggle = async () => {
-    if (s.live) { try { window.__talkLiveHandle?.close() } catch {}; return }
-    if (busy || bus.live) return
-    try { window.__talkLiveHandle?.close() } catch {}
+    if (bus.live) { try { window.__talkLiveHandle?.close() } catch {}; return }
+    if (_disposed || _startingLive) return
     const effProfile = profile === '__host' ? '' : (profile || autoBot())
     const eng = ctx.storage.get(KEY_ENGINE) || 'codex'
     const vv = effVoiceFor(eng, ctx.storage.get(KEY_VOICE) || '')
     setBusy(true)
     try {
-      window.__talkLiveHandle = await startLive(ctx, { profile: effProfile, voice: vv, micId, outId, engine: eng, log: () => {} })
+      window.__talkLiveHandle = await startLive(ctx, { profile: effProfile, voice: vv,
+        micId: ctx.storage.get(KEY_MIC) || '', outId: ctx.storage.get(KEY_OUT) || '', engine: eng, log: () => {} })
     } catch (e) {
       let m = backendHint(String(e?.message || e))
       if (m.indexOf('LIVE_SIN_QUOTA') >= 0) {
@@ -1656,12 +1808,26 @@ function ComposerLiveButton({ ctx }) {
         m = tr('Este Codex no soporta delegar en tu chat (clientManagedHandoffs): actualiza Codex, usa delegation=server o el motor gpt-realtime.', 'This Codex does not support delegating to your chat (clientManagedHandoffs): update Codex, use delegation=server or the gpt-realtime engine.')
       }
       m = m.slice(0, 240)
+      if (_disposed) return
       bus.set({ err: m, live: false, stage: 'error', widget: true, micLevel: 0, remoteLevel: 0 })
       try { if (sdk.host && sdk.host.notifyError) sdk.host.notifyError(String(m), 'Live Voice') } catch {}
     } finally { setBusy(false) }
   }
 
   const live = s.live && s.stage === 'connected'
+  // Wake through the ordinary call path, using the current voice/mic/engine.
+  const toggleRef = useRef(toggle)
+  toggleRef.current = toggle
+  useEffect(() => {
+    _disposed = false
+    const resume = () => { if (!bus.live && !_startingLive) toggleRef.current() }
+    _wakeOwners.add(resume)
+    armWakeListener(ctx)
+    return () => {
+      _wakeOwners.delete(resume)
+      if (!_wakeOwners.size) disposeVoice()
+    }
+  }, [])
   useEffect(() => { if (!s.live && showTr) setShowTr(false) }, [s.live, showTr])
   const connecting = busy || (s.live && s.stage !== 'connected' && s.stage !== 'error' && s.stage !== 'failed')
   const cs = 'var(--composer-control-size, 30px)'
@@ -1674,7 +1840,9 @@ function ComposerLiveButton({ ctx }) {
         ref: btnRef,
         type: 'button',
         'data-context-menu-skip': 'true',
-        title: live ? tr('Colgar Live Voice', 'Hang up Live Voice') : tr('Live Voice — click para hablar', 'Live Voice — click to talk'),
+        title: live ? tr('Colgar Live Voice', 'Hang up Live Voice') : (s.stage === 'listening'
+          ? tr('Escucha local activa. Desactiva "Activar con sonido" para apagar el micrófono.', 'Local mic listening is on. Turn off "Wake on sound" to stop monitoring.')
+          : tr('Live Voice — click para hablar', 'Live Voice — click to talk')),
         onClick: toggle,
         onMouseEnter: () => setMicHover(true),
         onMouseLeave: () => setMicHover(false),
@@ -1721,6 +1889,11 @@ function ComposerLiveButton({ ctx }) {
           transition: 'background 140ms, color 140ms, box-shadow 140ms, transform 140ms'
         },
         children: s.muted ? jsx(MicOffIcon, { size: 14 }) : jsx(MicIcon, { size: 14 })
+      }),
+      s.stage === 'listening' && jsx('span', {
+        'aria-live': 'polite',
+        style: { fontSize: 10, color: 'var(--ui-text-secondary)' },
+        children: tr('Escucha local', 'Local listening')
       }),
       live && jsx('span', {
         'data-context-menu-skip': 'true',
@@ -1883,6 +2056,8 @@ export default {
   id: 'talk-desktop',
   name: 'Live Voice',
   register(ctx) {
+    _disposed = false
+    ctx.onDispose(disposeVoice)
     ctx.register({
       id: 'composer-live',
       area: 'composer.leading',
