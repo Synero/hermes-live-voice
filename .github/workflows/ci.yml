@@ -24,5 +24,7 @@ jobs:
         run: python -m py_compile dashboard/plugin_api.py
       - name: Syntax-check desktop half
         run: node --check desktop/plugin.js
+      - name: Offline wake-on-sound lifecycle tests
+        run: node --test tests/wake-on-sound.test.cjs
       - name: Desktop plugin load harness (ESM import with stubs)
         run: bash tools/plugin-load-test.sh
