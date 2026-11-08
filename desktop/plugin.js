@@ -70,6 +70,38 @@ const effVoiceFor = (engine, stored) => {
   if (engine === 'codex') return ALL_V3_VOICES.indexOf(v) >= 0 ? v : 'cove'
   return VOICES.indexOf(v) >= 0 ? v : 'marin'
 }
+// The two engines have disjoint voice vocabularies, so a single stored voice
+// cannot represent both: switching engines (including the automatic quota
+// fallback to the 'hermes' engine) coerced the user's Codex voice to the other
+// engine's default and persisted that over the original choice.
+const KEY_VOICES = 'voices.v1'
+const voiceDefaultFor = engine => (engine === 'codex' ? 'cove' : 'marin')
+const voiceSetFor = engine => (engine === 'codex' ? ALL_V3_VOICES : VOICES)
+const readVoiceMap = ctx => {
+  const raw = ctx.storage.get(KEY_VOICES)
+  if (raw) {
+    try {
+      const m = JSON.parse(raw)
+      if (m && typeof m === 'object' && !Array.isArray(m)) return m
+    } catch {}
+  }
+  // Migrate the legacy single-value key into the engine whose vocabulary holds it.
+  const legacy = String(ctx.storage.get(KEY_VOICE) || '')
+  const seed = {}
+  if (ALL_V3_VOICES.indexOf(legacy) >= 0) seed.codex = legacy
+  if (VOICES.indexOf(legacy) >= 0) seed.hermes = legacy
+  return seed
+}
+const readVoiceFor = (ctx, engine) => {
+  const v = readVoiceMap(ctx)[engine]
+  return voiceSetFor(engine).indexOf(v) >= 0 ? v : voiceDefaultFor(engine)
+}
+const writeVoiceFor = (ctx, engine, voice) => {
+  if (voiceSetFor(engine).indexOf(voice) < 0) return   // never store a voice this engine cannot speak
+  const m = readVoiceMap(ctx)
+  m[engine] = voice
+  try { ctx.storage.set(KEY_VOICES, JSON.stringify(m)) } catch {}
+}
 const SENTINEL_DEFAULT = '__default'
 const SENTINEL_HOST = '__host'
 const LANGUAGE = (() => {
@@ -1068,7 +1100,7 @@ async function _pvGenerate(ctx, { engine, voice, profile, micId, outId }) {
 // ── formulario de configuración (Popover / widget / pane comparten esto) ────
 
 function ConfigForm({ ctx, dense = false }) {
-  const [voice, setVoice] = useState(() => ctx.storage.get(KEY_VOICE) || 'marin')
+  const [voice, setVoice] = useState(() => readVoiceFor(ctx, ctx.storage.get(KEY_ENGINE) || 'codex'))
   const [profile, setProfile] = useState(() => ctx.storage.get(KEY_PROFILE) || '')
   const [micId, setMicId] = useState(() => ctx.storage.get(KEY_MIC) || '')
   const [outId, setOutId] = useState(() => ctx.storage.get(KEY_OUT) || '')
@@ -1092,7 +1124,15 @@ function ConfigForm({ ctx, dense = false }) {
       .then(list => setDevs({ mics: list.filter(d => d.kind === 'audioinput'), outs: list.filter(d => d.kind === 'audiooutput') }))
       .catch(() => {})
   }, [])
-  useEffect(() => { ctx.storage.set(KEY_VOICE, voice) }, [voice])
+  useEffect(() => { writeVoiceFor(ctx, engine, voice) }, [voice, engine])
+  const prevEngineRef = useRef(null)
+  useEffect(() => {
+    // Switching engines must load that engine's own saved voice instead of
+    // coercing the other engine's voice to a default and persisting it.
+    const prev = prevEngineRef.current
+    prevEngineRef.current = engine
+    if (prev && prev !== engine) setVoice(readVoiceFor(ctx, engine))
+  }, [engine])
   useEffect(() => { ctx.storage.set(KEY_PROFILE, profile) }, [profile])
   useEffect(() => { ctx.storage.set(KEY_MIC, micId) }, [micId])
   useEffect(() => { ctx.storage.set(KEY_OUT, outId) }, [outId])
@@ -1214,7 +1254,7 @@ function ConfigForm({ ctx, dense = false }) {
     ] }),
     jsxs('div', { style: field, children: [
       jsx('div', { style: label, children: tr('Voz', 'Voice') }),
-      jsxs(Select, { value: effVoiceFor(engine, voice), onValueChange: setVoice, children: [
+      jsxs(Select, { value: voiceSetFor(engine).indexOf(voice) >= 0 ? voice : voiceDefaultFor(engine), onValueChange: setVoice, children: [
         jsx(SelectTrigger, { style: trigStyle, children: jsx(SelectValue, { style: valStyle }) }),
         jsx(SelectContent, { children: voiceGroupsFor(engine).map(group => jsx('div', { role: 'group', 'aria-label': group.label, children: [
           jsx('div', { 'aria-hidden': 'true', style: { padding: '6px 10px 3px', fontSize: 10, fontWeight: 700, color: 'var(--ui-text-tertiary)' }, children: group.label }, 'group-label-' + group.label),
@@ -1582,7 +1622,7 @@ function ComposerLiveButton({ ctx }) {
   const [trHover, setTrHover] = useState(false)
   const [showTr, setShowTr] = useState(false)
   const [profile, setProfile] = useState(() => ctx.storage.get(KEY_PROFILE) || '')
-  const [voice, setVoice] = useState(() => ctx.storage.get(KEY_VOICE) || 'marin')
+  const [voice, setVoice] = useState(() => readVoiceFor(ctx, ctx.storage.get(KEY_ENGINE) || 'codex'))
   const [micId, setMicId] = useState(() => ctx.storage.get(KEY_MIC) || '')
   const [outId, setOutId] = useState(() => ctx.storage.get(KEY_OUT) || '')
   const btnRef = useRef(null)
@@ -1608,7 +1648,7 @@ function ComposerLiveButton({ ctx }) {
   useEffect(() => {
     const t = setInterval(() => {
       const p = ctx.storage.get(KEY_PROFILE) || ''
-      const v = ctx.storage.get(KEY_VOICE) || 'marin'
+      const v = readVoiceFor(ctx, ctx.storage.get(KEY_ENGINE) || 'codex')
       const mi = ctx.storage.get(KEY_MIC) || ''
       const o = ctx.storage.get(KEY_OUT) || ''
       setProfile(prev => (prev === p ? prev : p))
@@ -1639,7 +1679,7 @@ function ComposerLiveButton({ ctx }) {
     try { window.__talkLiveHandle?.close() } catch {}
     const effProfile = profile === '__host' ? '' : (profile || autoBot())
     const eng = ctx.storage.get(KEY_ENGINE) || 'codex'
-    const vv = effVoiceFor(eng, ctx.storage.get(KEY_VOICE) || '')
+    const vv = readVoiceFor(ctx, eng)
     setBusy(true)
     try {
       window.__talkLiveHandle = await startLive(ctx, { profile: effProfile, voice: vv, micId, outId, engine: eng, log: () => {} })
