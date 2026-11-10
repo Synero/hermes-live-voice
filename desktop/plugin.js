@@ -348,7 +348,7 @@ async function _admit(handoff, steer = false) {
   const run = async () => {
     const context = owner.context(handoff.snapshot)
     const params = steer
-      ? {session_id: owner.sid, execution_generation: owner.generation, text: _withBackground(handoff.req, context)}
+      ? {session_id: owner.sid, ...(owner.generation != null ? {execution_generation: owner.generation} : {}), text: _withBackground(handoff.req, context)}
       : (handoff.payload || {session_id: owner.sid, text: handoff.req, surface: 'voice-live',
           submission_id: 'voice:' + owner.id + ':' + handoff.itemId, ...(context ? {voice_context: context} : {})})
     if (!steer) handoff.payload = params
@@ -562,7 +562,7 @@ function handleDelegation(ctx, msg, dc) {
   }
   req = handoff.req
   handoff.state = 'pending'
-  if (_delegBusy && _delegSid && handoff.owner.generation != null && host && typeof host.request === 'function') {
+  if (_delegBusy && _delegSid && host && typeof host.request === 'function') {
     // Mid-task speech joins the running Hermes turn (session.steer), as in Codex voice (round4).
     const steerSid = _delegSid
     ;(async () => {

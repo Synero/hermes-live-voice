@@ -211,7 +211,7 @@ const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
   if (completion instanceof Error) throw completion;
   if (completion === 'agent-error') handlers.error({message: 'fallo original'});
   else if (completion !== null) handlers['message.complete']({text: completion});
-  return {admission_id: 'test', status: 'started', execution_generation: 7};
+  return {admission_id: 'test', status: 'started'};
 }};
 const messages = [];
 const dc = {send: data => messages.push(JSON.parse(data))};
@@ -270,7 +270,7 @@ DELEGATION
   // round4: mid-task speech joins the running Hermes turn via session.steer.
   handleDelegation(ctx, msg('mejor el jueves'), dc);
   await flush();
-  assert.deepEqual(steered, {session_id: 'session', execution_generation: 7, text: 'mejor el jueves'});
+  assert.deepEqual(steered, {session_id: 'session', text: 'mejor el jueves'});
   assert.match(lastText(), /^Passed to the running task as a correction/);
   assert.equal(messages.at(-1).channel, 'commentary');
   // Steer refused: falls back to the queue.
