@@ -82,6 +82,8 @@ const LANGUAGE = (() => {
 const EN = LANGUAGE === 'en'
 const DE = {
   'Weekly': 'Woche',
+  'Task complete. Result: ': 'Aufgabe erledigt. Ergebnis: ',
+  'passed to the running task: ': 'an die laufende Aufgabe übergeben: ',
   'The language label describes the voice’s regional focus, not its only supported language.': 'Die Sprachangabe beschreibt die regionale Ausrichtung der Stimme, nicht ihre einzige unterstützte Sprache.',
   'The sign-in code expired before approval.': 'Der Anmeldecode ist vor der Bestätigung abgelaufen.',
   'Sign-in failed': 'Anmeldung fehlgeschlagen',
