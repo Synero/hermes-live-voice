@@ -6,6 +6,6 @@ description: Full-duplex Live Voice for Hermes Desktop — Codex Live-1 (gpt-liv
 # Hermes signs the Realtime / usage requests with the user's openai-codex sign-in
 # (hermes_cli.plugin_provider_requests, NousResearch/hermes-agent#136117). The plugin
 # never reads, refreshes or rewrites a Codex token.
-requires_hermes: ">=0.21.7"
+requires_hermes: ">=0.22.3"
 requires_auth:
   - openai-codex
