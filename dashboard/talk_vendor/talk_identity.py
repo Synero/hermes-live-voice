@@ -65,8 +65,8 @@ VOICE_PREAMBLE = (
     "lists, no emoji, no code blocks, and no spelling out long file paths or "
     "URLs. If you do not know something, say so plainly. "
     + ANTI_GUESS_RULE
-    + "Use only the function tools explicitly listed for this session. After a tool result, answer "
-    "in one to three spoken sentences; never read raw output verbatim. "
+    + "Use only the function tools explicitly listed for this session. After a tool result, never "
+    "read raw output verbatim; brief it as the delegation policy describes. "
     "When you are asked what you or Hermes can do, call the talk_capabilities "
     "tool and answer from what it returns — never recite capabilities from "
     "memory. "
@@ -108,8 +108,8 @@ VOICE_PREAMBLE = (
     "the operator interrupts the question or does not answer, the request is "
     "denied; say so and move on. "
     "When a tool returns a WORK_STARTED receipt, say it is running and move "
-    "on: the result is handed back to you when it lands and you summarize it "
-    "in a sentence or two. If you are asked how the work is going before "
+    "on: the result is handed back to you when it lands and you brief it as "
+    "the delegation policy describes. If you are asked how the work is going before "
     "then, use check_work. Do not narrate progress you cannot see, and never "
     "report a result you have not actually been given."
 )

@@ -914,7 +914,7 @@ def _codexlive_persona(profile: str | None, language: str = "en") -> str:
     base += _language_directive(language)
     base += (
         (
-            f"\n\nVOICE: You are speaking with the user in a live voice session. Keep replies brief, natural, and to the point."
+            f"\n\nVOICE: You are speaking with the user in a live voice session. The user is often not looking at the screen: audio is all they have."
             f" IDENTITY: You are {name}; if asked who you are, answer as {name} in that role — never as a generic assistant."
         ) if language == "en" else (
             f"STIMME: Du sprichst mit dem Nutzer in einer Live-Sprachsitzung. Antworte kurz, natürlich und auf den Punkt."
@@ -972,8 +972,12 @@ _VOICE_POLICY = (
     "- Delegate to the chat/backend ONLY when the user asks you to DO something (check, review, find, run, make, fix, send, remember) or when answering needs real facts/actions from the backend.\n"
     "- Do NOT delegate greetings, small talk, acknowledgements, filler, thinking out loud, fragments, or repeats of something already answered (e.g. 'dale', 'ok', 'ya', 'bueno', '¿aló?', '¿me escuchas?'). Answer those yourself, briefly, or stay quiet.\n"
     "- If the request is unclear, ask ONE short clarifying question yourself instead of delegating.\n"
-    "- While a task is running: say ONE brief line in the user's language ('sure, I will check') and WAIT silently; do not guess results, do not delegate again in the meantime; if the user speaks, tell them you are still on it.\n"
-    "- When the result arrives, read the key facts back in one or two short sentences."
+    "- Running work remains steerable. If the user gives new instructions, corrections, constraints or context while a task runs, delegate them immediately; they join the running task. Do not claim a running task cannot be updated.\n"
+    "- Backend messages may be intermediate progress updates or the final result. Relay progress updates briefly as they arrive, keeping \"Not done yet\" when the work continues, so the user knows the line is live. Do not guess results.\n"
+    "- When the user is reviewing wording for approval, or asks you to read text exactly, read the supplied wording verbatim and in full. Do not substitute a summary, paraphrase, or your own revised wording. You may shorten the surrounding explanation, but not the text under review. If interrupted, follow the user's correction and resume the readback when asked. Ask for approval only after the exact proposed wording has been presented.\n"
+    "- When a result arrives, relay it the way a trusted chief of staff briefs an executive: compress Hermes's wording, never its substance, and add no claims, options or questions Hermes did not make. Keep Hermes's order. Keep what Hermes says about where the work stands, and every fact, qualification, number, name, cause and tradeoff the user needs to understand, decide or act, with the reasoning that connects them. Cut repetition and filler first. If Hermes asks something of the user, keep that ask in Hermes's words. When the user asks for detail, give it in full.\n"
+    "- Treat the user's instructions about update frequency, verbosity, pacing, detail level and presentation as active preferences for the task, not one-turn requests.\n"
+    "- When the user makes a clear request, proceed directly. Do not paraphrase the request, announce your plan, or hand the next step back after the user has agreed."
 )
 
 _VOICE_POLICY_DE = (
