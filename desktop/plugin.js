@@ -189,6 +189,7 @@ let liveAudioMs = 0
 let handoffMode = 'client'
 let _delegBusy = false
 let _delegQueue = null
+let _delegSid = ''
 let _lastAppendedId = ''
 let _bumpTimer = null
 function _bumpTranscript() {
@@ -279,7 +280,7 @@ const _isUnknownParamError = e => {
   return code === 4000 || /\b4000\b|extra|not permitted|unexpected|unknown (param|field|key)|surface/i.test(msg)
 }
 
-async function delegateToChat(text) {
+async function delegateToChat(text, onProgress) {
   const req = String(text || '').trim()
   if (!req) return tr('Petición vacía.', 'Empty request.')
   if (_delegating && _delegating.text === req && Date.now() - _delegating.at < 30000) return tr('Esa petición ya está en curso en el chat; espera su respuesta.', 'That request is already in progress in the chat; wait for its response.')
@@ -287,6 +288,7 @@ async function delegateToChat(text) {
   const sid = String(atomGet(host.state.focusedSessionId) || atomGet(host.state.activeSessionId) || '')
   if (!sid) return tr('No hay una conversación abierta en la ventana. Dile al usuario que abra el chat donde quieres trabajar y que repita la petición.', 'No conversation is open in the window. Tell the user to open the chat where they want to work and repeat the request.')
   _delegating = { text: req, at: Date.now() }
+  _delegSid = sid
   pushTranscript('tool', tr('trabajando en el chat…', 'working in the chat…'))
   let acc = ''
   let settled = false
@@ -304,6 +306,22 @@ async function delegateToChat(text) {
           const piece = ev && (ev.delta != null ? ev.delta : ev.text)
           if (typeof piece === 'string') acc += piece
         }))
+        // Live narration (round4): tool starts and Hermes's interim notes go to the voice as progress.
+        let lastTool = ''
+        unsubs.push(host.onEvent('tool.start', ev => {
+          if (settled || !same(ev) || typeof onProgress !== 'function') return
+          const pl = (ev && ev.payload) || ev || {}
+          const name = String(pl.name || ev.name || '').trim()
+          if (!name || name === lastTool) return
+          lastTool = name
+          const ctxTxt = String(pl.context || '').trim().slice(0, 120)
+          onProgress('Hermes is working: ' + name + (ctxTxt ? ' (' + ctxTxt + ')' : '') + '. Not done yet.')
+        }))
+        unsubs.push(host.onEvent('message.interim', ev => {
+          if (settled || !same(ev) || typeof onProgress !== 'function') return
+          const t = evText(ev).trim()
+          if (t) onProgress(t + '\n\nNot done yet.')
+        }))
         unsubs.push(host.onEvent('message.complete', ev => {
           if (settled || !same(ev)) return
           settled = true
@@ -319,7 +337,9 @@ async function delegateToChat(text) {
       // la burbuja del usuario queda con lo que dijo. Hosts viejos rechazan el campo (params
       // extra=forbid) y ahí caemos al prefijo de siempre.
       try {
-        await host.request('prompt.submit', { session_id: sid, text: req, surface: 'voice-live' })
+        const voiceContext = transcript.filter(it => (it.role === 'user' || it.role === 'bot') && it.text).slice(-12)
+          .map(it => (it.role === 'user' ? 'User: ' : 'Voice: ') + String(it.text).trim()).join('\n')
+        await host.request('prompt.submit', Object.assign({ session_id: sid, text: req, surface: 'voice-live' }, voiceContext ? { voice_context: voiceContext } : {}))
       } catch (e) {
         if (!_isUnknownParamError(e)) throw e
         await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
@@ -328,10 +348,10 @@ async function delegateToChat(text) {
       return tr('No se pudo enviar al chat: ', 'Could not send to the chat: ') + String((e && e.message) || e || 'error')
     }
     const t0 = Date.now()
-    while (!settled && Date.now() - t0 < 240000) await sleep(300)
+    while (!settled && Date.now() - t0 < 3600000) await sleep(300)
     if (!settled) return tr('El agente sigue trabajando en el chat; avísale al usuario que la respuesta aparecerá ahí en un momento.', 'The agent is still working in the chat; tell the user the response will appear there shortly.')
     const out = (errText || finalText || acc).trim()
-    return out ? out.slice(0, 4000) : tr('El agente terminó sin texto visible.', 'The agent finished without visible text.')
+    return out ? out : tr('El agente terminó sin texto visible.', 'The agent finished without visible text.')
   } finally {
     _delegating = null
     for (const u of unsubs) { try { u() } catch {} }
@@ -388,10 +408,19 @@ function _plainForVoice(t) {
   return s.trim()
 }
 
-function _delegRespond(dc, itemId, text) {
+// channel: 'speakable' (default on this wire) or 'commentary' (progress), as codex app-server sends them.
+function _clipHeadTail(t, max) {
+  t = String(t || '')
+  if (t.length <= max) return t
+  const head = Math.floor(max * 0.7), tail = max - head
+  return t.slice(0, head) + '\n…output truncated…\n' + t.slice(t.length - tail)
+}
+function _delegRespond(dc, itemId, text, channel) {
   try {
-    dc.send(JSON.stringify({ type: 'delegation.context.append', delegation_item_id: itemId,
-      content: [{ type: 'input_text', text: String(text || '').slice(0, 3500) }] }))
+    const ev = { type: 'delegation.context.append', delegation_item_id: itemId,
+      content: [{ type: 'input_text', text: _clipHeadTail(text, 3500) }] }
+    if (channel) ev.channel = channel
+    dc.send(JSON.stringify(ev))
   } catch {}
 }
 
@@ -424,6 +453,23 @@ function handleDelegation(ctx, msg, dc) {
     _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
     return
   }
+  if (_delegBusy && _delegSid && host && typeof host.request === 'function') {
+    // Mid-task speech joins the running Hermes turn (session.steer), as in Codex voice (round4).
+    const steerSid = _delegSid
+    ;(async () => {
+      let st = ''
+      try { const r = await host.request('session.steer', { session_id: steerSid, text: req }); st = String((r && r.status) || '') } catch { st = '' }
+      if (st === 'queued' || st === 'redirected') {
+        pushTranscript('tool', tr('pasado a la tarea en curso: ', 'passed to the running task: ') + req.slice(0, 100))
+        _delegRespond(dc, itemId, 'Passed to the running task as a correction: "' + req + '". Hermes will take it into account. Not done yet.', 'commentary')
+      } else {
+        _delegQueue = { req, itemId, at: Date.now() }
+        pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
+        _delegRespond(dc, itemId, 'Hermes could not take that into the running task; it is queued and will run when the current task finishes. Not done yet.', 'commentary')
+      }
+    })()
+    return
+  }
   if (_delegBusy) {
     _delegQueue = { req, itemId, at: Date.now() }
     pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
@@ -437,12 +483,12 @@ function _runDelegation(ctx, dc, itemId, req) {
   _delegBusy = true
   ;(async () => {
     let out = ''
-    try { out = await delegateToChat(req) } catch (e) { out = '' }
+    try { out = await delegateToChat(req, txt => _delegRespond(dc, itemId, _plainForVoice(txt), 'commentary')) } catch (e) { out = '' }
     out = String(out || '').trim()
     if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
     const forVoice = _plainForVoice(out)
     pushTranscript('tool', tr('resultado: ', 'result: ') + forVoice.slice(0, 160))
-    _delegRespond(dc, itemId, tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): ', 'Task result (answer the user with this, briefly and naturally): ') + forVoice)
+    _delegRespond(dc, itemId, tr('Resultado de la tarea (completa): ', 'Task complete. Result: ') + forVoice, 'speakable')
   })().catch(() => {}).then(() => {
     _delegBusy = false
     const q = _delegQueue

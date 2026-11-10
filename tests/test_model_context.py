@@ -192,7 +192,8 @@ const LANGUAGE = EN_VALUE ? 'en' : 'es';
 const EN = LANGUAGE === 'en';
 const DE = {};
 const tr = (es, en, de) => LANGUAGE === 'de' ? (de || en) : (EN ? en : es);
-let _delegating = null, _delegBusy = false, _delegQueue = null;
+let _delegating = null, _delegBusy = false, _delegQueue = null, _delegSid = '';
+let steerStatus = 'queued', steered = null, progressRun = false, submittedContext;
 let handoffMode = 'client';
 const transcript = [], pushTranscript = () => {}, KEY_CHAT = 'chat';
 let now = 1000000;
@@ -203,8 +204,10 @@ let completion = 'Resultado en español.', submitted, submittedSurface, legacyHo
 const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
   handlers[name] = cb; return () => { delete handlers[name]; };
 }, request: async (method, body) => {
+  if (method === 'session.steer') { steered = body; return {status: steerStatus, text: body.text}; }
   if (legacyHost && 'surface' in body) { const e = new Error('Invalid params: surface: Extra inputs are not permitted'); e.code = 4000; throw e; }
-  submitted = body.text; submittedSurface = body.surface;
+  submitted = body.text; submittedSurface = body.surface; submittedContext = body.voice_context;
+  if (progressRun) { handlers['tool.start']({name: 'terminal'}); handlers['tool.start']({name: 'terminal'}); handlers['message.interim']({text: 'Found two candidates.'}); }
   if (completion instanceof Error) throw completion;
   if (completion === 'agent-error') handlers.error({message: 'fallo original'});
   else if (completion !== null) handlers['message.complete']({text: completion});
@@ -234,6 +237,15 @@ DELEGATION
   assert.ok(submitted.endsWith('\n\nrevisa mi archivo'));
   assert.equal(submittedSurface, undefined);
   legacyHost = false;
+  // round4: progress narration and recent transcript.
+  transcript.push({role: 'user', text: 'check the printer'}, {role: 'bot', text: 'On it.'});
+  progressRun = true;
+  const prog = [];
+  assert.equal(await delegateToChat('revisa', t => prog.push(t)), completion);
+  progressRun = false;
+  assert.deepEqual(prog, ['Hermes is working: terminal. Not done yet.', 'Found two candidates.\n\nNot done yet.']);
+  assert.equal(submittedContext, 'User: check the printer\nVoice: On it.');
+  transcript.length = 0;
   completion = new Error('fallo original');
   assert.equal(await delegateToChat('revisa'), tr('No se pudo enviar al chat: fallo original', 'Could not send to the chat: fallo original'));
   completion = 'agent-error';
@@ -256,20 +268,30 @@ DELEGATION
   handleDelegation({storage: {get: () => '0'}}, msg('revisa mi archivo'), dc);
   assert.match(lastText(), (EN ? /^I cannot run that/ : /^No puedo ejecutar tareas/));
   _delegBusy = true;
+  // round4: mid-task speech joins the running Hermes turn via session.steer.
+  handleDelegation(ctx, msg('mejor el jueves'), dc);
+  await flush();
+  assert.deepEqual(steered, {session_id: 'session', text: 'mejor el jueves'});
+  assert.match(lastText(), /^Passed to the running task as a correction/);
+  assert.equal(messages.at(-1).channel, 'commentary');
+  // Steer refused: falls back to the queue.
+  steerStatus = 'rejected';
   handleDelegation(ctx, msg('revisa mi archivo'), dc);
-  assert.match(lastText(), (EN ? /^A task is already in progress/ : /^Ya hay una tarea en curso/));
+  await flush();
+  assert.match(lastText(), /^Hermes could not take that into the running task/);
+  steerStatus = 'queued';
   _delegQueue.at = now - 600001;
   _delegBusy = false;
   _runDelegation(ctx, dc, 'current', 'revisa');
   await flush();
   assert.match(lastText(), (EN ? /^The queued task went stale/ : /^La tarea en cola quedó obsoleta/));
-  assert.ok(messages.some(m => m.content?.[0]?.text === tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): ', 'Task result (answer the user with this, briefly and naturally): ') + completion));
+  assert.ok(messages.some(m => m.content?.[0]?.text === tr('Resultado de la tarea (completa): ', 'Task complete. Result: ') + completion && m.channel === 'speakable'));
   assert.equal(_plainForVoice('Texto español. ```codigo```'), tr('Texto español.  (bloque de código omitido)', 'Texto español.  (code block omitted)'));
   const realDelegate = delegateToChat;
   delegateToChat = async () => '';
   _runDelegation(ctx, dc, 'empty', 'revisa');
   await flush();
-  assert.equal(lastText(), tr('Resultado de la tarea (respóndele al usuario con esto, breve y natural): La tarea no pudo completarse en el chat.', 'Task result (answer the user with this, briefly and naturally): The task could not be completed in the chat.'));
+  assert.equal(lastText(), tr('Resultado de la tarea (completa): La tarea no pudo completarse en el chat.', 'Task complete. Result: The task could not be completed in the chat.'));
   delegateToChat = realDelegate;
   // Preview prompt construction and both outbound formats; no media APIs run.
   for (const eng of ['codex', 'realtime']) {
