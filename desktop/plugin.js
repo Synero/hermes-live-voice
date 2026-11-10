@@ -408,19 +408,31 @@ function _plainForVoice(t) {
   return s.trim()
 }
 
-// channel: 'speakable' (default on this wire) or 'commentary' (progress), as codex app-server sends them.
-function _clipHeadTail(t, max) {
-  t = String(t || '')
-  if (t.length <= max) return t
-  const head = Math.floor(max * 0.7), tail = max - head
-  return t.slice(0, head) + '\n…output truncated…\n' + t.slice(t.length - tail)
+// The server rejects an append over 500 tokens and Codex then closes the whole session
+// ("failed"). Like Codex's own client (CONTEXT_APPEND_MAX_BYTES), send the text whole as
+// ordered pieces of <=500 UTF-8 bytes; a token is at least one byte.
+const APPEND_MAX_BYTES = 500
+const _utf8 = new TextEncoder()
+function _appendChunks(text) {
+  const chunks = []
+  let cur = '', bytes = 0
+  for (const ch of String(text || '')) {
+    const n = _utf8.encode(ch).length
+    if (bytes + n > APPEND_MAX_BYTES) { chunks.push(cur); cur = ''; bytes = 0 }
+    cur += ch; bytes += n
+  }
+  chunks.push(cur)
+  return chunks
 }
+// channel: 'speakable' (default on this wire) or 'commentary' (progress), as codex app-server sends them.
 function _delegRespond(dc, itemId, text, channel) {
   try {
-    const ev = { type: 'delegation.context.append', delegation_item_id: itemId,
-      content: [{ type: 'input_text', text: _clipHeadTail(text, 3500) }] }
-    if (channel) ev.channel = channel
-    dc.send(JSON.stringify(ev))
+    for (const piece of _appendChunks(text)) {
+      const ev = { type: 'delegation.context.append', delegation_item_id: itemId,
+        content: [{ type: 'input_text', text: piece }] }
+      if (channel) ev.channel = channel
+      dc.send(JSON.stringify(ev))
+    }
   } catch {}
 }
 

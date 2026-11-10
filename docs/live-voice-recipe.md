@@ -83,7 +83,11 @@ The **executor** is chosen when starting the session:
 Notes: the `content` text carries the user's request when it came from real audio; with text-only
 setups (`session.context.append` instead of speech) it can be empty — fall back to the transcript.
 `delegation.function_call_output.create` expects an `item` object; `delegation.context.append` is the
-working result channel.
+working result channel. Each append's text must stay within **500 tokens**: a larger one gets
+`invalid_request_error` "Context append text must not exceed 500 tokens." and the Codex core then
+closes the whole live session with outcome `failed`. Send long results whole as ordered appends of
+≤500 UTF-8 bytes to the same `delegation_item_id` and channel, as Codex's own client does
+(`CONTEXT_APPEND_MAX_BYTES` in `codex-rs/.../methods_frameless_bidi.rs`).
 
 ## Gotchas (learned the hard way)
 
