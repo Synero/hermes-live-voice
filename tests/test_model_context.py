@@ -211,12 +211,13 @@ const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
   if (completion instanceof Error) throw completion;
   if (completion === 'agent-error') handlers.error({message: 'fallo original'});
   else if (completion !== null) handlers['message.complete']({text: completion});
+  return {admission_id: 'test', status: 'started', execution_generation: 7};
 }};
 const messages = [];
 const dc = {send: data => messages.push(JSON.parse(data))};
 const ctx = {storage: {get: () => '1'}};
 const lastText = () => messages.at(-1).content[0].text;
-const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 DELEGATION
 (async () => {
   assert.equal(await delegateToChat(''), tr('Petición vacía.', 'Empty request.'));
@@ -230,21 +231,18 @@ DELEGATION
   // Host nuevo: la burbuja queda con lo dicho; la nota de voz la agrega el host solo al modelo.
   assert.equal(submitted, 'revisa mi archivo');
   assert.equal(submittedSurface, 'voice-live');
-  // Host viejo (params extra=forbid): cae al prefijo de siempre.
+  // An incompatible host must not silently resubmit without the spoken background.
   legacyHost = true;
-  assert.equal(await delegateToChat('revisa mi archivo'), completion);
-  assert.match(submitted, (EN ? /^\[voice\] Reply briefly and naturally/ : /^\[voz\] Responde breve y natural/));
-  assert.ok(submitted.endsWith('\n\nrevisa mi archivo'));
-  assert.equal(submittedSurface, undefined);
+  assert.match(await delegateToChat('revisa mi archivo'), /Invalid params/);
   legacyHost = false;
   // round4: progress narration and recent transcript.
-  transcript.push({role: 'user', text: 'check the printer'}, {role: 'bot', text: 'On it.'});
+  _voiceTranscript.delta('user', 'check the printer'); _voiceTranscript.delta('assistant', 'On it.');
   progressRun = true;
   const prog = [];
   assert.equal(await delegateToChat('revisa', t => prog.push(t)), completion);
   progressRun = false;
   assert.deepEqual(prog, ['Hermes is working: terminal. Not done yet.', 'Found two candidates.\n\nNot done yet.']);
-  assert.equal(submittedContext, 'User: check the printer\nVoice: On it.');
+  assert.ok(submittedContext.endsWith('User: check the printer\nVoice: On it.'));
   transcript.length = 0;
   completion = new Error('fallo original');
   assert.equal(await delegateToChat('revisa'), tr('No se pudo enviar al chat: fallo original', 'Could not send to the chat: fallo original'));
@@ -262,7 +260,8 @@ DELEGATION
   assert.equal(messages.at(-2).item.output, tr('La herramienta probe falló: fallo original', 'The tool probe failed: fallo original'));
   await runVoiceTool({rest: async (path, options) => { assert.equal(options.body.language, EN ? 'en' : 'es'); return {output: completion}; }}, 'call', 'probe', {}, dc);
   assert.equal(messages.at(-2).item.output, completion);
-  const msg = text => ({item: {id: 'item', content: [{text}]}});
+  let itemSequence = 0;
+  const msg = text => ({item: {id: 'item-' + (++itemSequence), content: [{text}]}});
   handleDelegation(ctx, msg('hola, ¿me escuchas?'), dc);
   assert.match(lastText(), (EN ? /^The user was just chatting/ : /^El usuario solo estaba conversando/));
   handleDelegation({storage: {get: () => '0'}}, msg('revisa mi archivo'), dc);
@@ -271,7 +270,7 @@ DELEGATION
   // round4: mid-task speech joins the running Hermes turn via session.steer.
   handleDelegation(ctx, msg('mejor el jueves'), dc);
   await flush();
-  assert.deepEqual(steered, {session_id: 'session', text: 'mejor el jueves'});
+  assert.deepEqual(steered, {session_id: 'session', execution_generation: 7, text: 'mejor el jueves'});
   assert.match(lastText(), /^Passed to the running task as a correction/);
   assert.equal(messages.at(-1).channel, 'commentary');
   // Steer refused: falls back to the queue.
@@ -280,7 +279,7 @@ DELEGATION
   await flush();
   assert.match(lastText(), /^Hermes could not take that into the running task/);
   steerStatus = 'queued';
-  _delegQueue.at = now - 600001;
+  _delegQueue[0].at = now - 600001;
   _delegBusy = false;
   _runDelegation(ctx, dc, 'current', 'revisa');
   await flush();

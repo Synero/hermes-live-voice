@@ -33,6 +33,7 @@ const host = {state: {focusedSessionId: 'session'}, onEvent: (name, cb) => {
 }, request: async () => {
   handlers['message.interim']({text: interim});
   handlers['message.complete']({text: longText});
+  return {admission_id: 'test', status: 'started', execution_generation: 7};
 }};
 const frames = [];
 const dc = {send: data => frames.push(JSON.parse(data))};

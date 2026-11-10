@@ -225,6 +225,7 @@ function _push(role, text, done) {
   _bumpTranscript()
 }
 function pushTranscript(role, text) {
+  if (role === "bot") _voiceTranscript.delta("assistant", String(text ?? ""))
   const raw = String(text == null ? '' : text)
   const now = Date.now()
   const open = role === 'bot' ? _recentOpen('bot', now) : null
@@ -234,6 +235,7 @@ function pushTranscript(role, text) {
   _push(role, t, role !== 'bot')
 }
 function pushUserDelta(text) {
+  _voiceTranscript.delta("user", String(text ?? ""))
   const raw = String(text == null ? '' : text)
   if (!raw) return
   const now = Date.now()
@@ -243,6 +245,7 @@ function pushUserDelta(text) {
 }
 
 function finalizeUser(finalText) {
+  _voiceTranscript.finish("user", String(finalText ?? ""))
   const t = String(finalText == null ? '' : finalText).trim()
   if (!t) return
   const open = _recentOpen('user', Date.now()) || _lastOpen('user')
@@ -254,6 +257,7 @@ function finalizeUser(finalText) {
 }
 
 function endBotTranscript(finalText) {
+  _voiceTranscript.finish("assistant", String(finalText ?? ""))
   const t = String(finalText == null ? '' : finalText).trim()
   if (!t) return
   const open = _recentOpen('bot', Date.now()) || _lastOpen('bot')
@@ -263,7 +267,11 @@ function endBotTranscript(finalText) {
   }
   _push('bot', t, true)
 }
-function clearTranscript() { transcript = []; _bumpTranscript() }
+function clearTranscript() {
+  transcript = []; _voiceTranscript = new VoiceTranscript()
+  _delegBusy = false; _delegQueue = null; _delegSid = ''; _delegating = null
+  _bumpTranscript()
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 let _delegating = null
@@ -274,18 +282,98 @@ const _voiceNote = () => LANGUAGE === 'de' ? '[Stimme] Antworte kurz und natürl
   ? '[voice] Reply briefly and naturally in the user’s language so it can be READ ALOUD (2-4 sentences, no markdown or lists). The text is dictated and may contain errors, use the latest intent. Do not claim something is done before it actually is.\n\n'
   : '[voz] Responde breve y natural en el idioma del usuario para LEER EN VOZ ALTA (2-4 frases, sin markdown ni listas). El texto es dictado y puede tener errores; usa la última intención. No afirmes que algo quedó hecho antes de hacerlo.\n\n')
 
+// Context is independent of the bounded display bubbles and their pause heuristic.
+class VoiceTranscript {
+  constructor() {
+    this.entries = []; this.lanes = new Map(); this.seq = 0; this.accepted = 0
+    this.id = globalThis.crypto?.randomUUID?.() || String(Date.now()) + '-' + Math.random()
+    this.requests = new Map(); this.sid = ''; this.generation = null; this.admission = Promise.resolve()
+  }
+  delta(role, text) {
+    if (!text) return
+    this.seq++
+    let lane = this.lanes.get(role)
+    if (!lane || lane.done) {
+      lane = {id: this.seq, role, text: '', done: false}
+      this.lanes.set(role, lane)
+    }
+    lane.text += text
+    this.entries.push({seq: this.seq, utterance: lane.id, role, text})
+  }
+  finish(role, text) {
+    const lane = this.lanes.get(role)
+    if (lane && !lane.done) {
+      if (text.startsWith(lane.text)) this.delta(role, text.slice(lane.text.length))
+      lane.done = true
+    } else if (text) {
+      this.delta(role, text); this.lanes.get(role).done = true
+    }
+  }
+  get lastUserText() { return this.lanes.get('user')?.text || '' }
+  snapshot() { return {through: this.seq, entries: this.entries.slice()} }
+  context(snapshot) {
+    const groups = new Map()
+    for (const e of snapshot.entries) {
+      if (e.seq <= this.accepted) continue
+      const group = groups.get(e.utterance) || {role: e.role, text: ''}
+      group.text += e.text; groups.set(e.utterance, group)
+    }
+    if (!groups.size) return ''
+    return '[Voice context incremental v1 call=' + this.id + ']\n' +
+      [...groups.values()].map(e => (e.role === 'user' ? 'User: ' : 'Voice: ') + e.text).join('\n')
+  }
+  acknowledge(handoff) {
+    this.accepted = Math.max(this.accepted, handoff.snapshot.through)
+    this.entries = this.entries.filter(e => e.seq > this.accepted)
+    handoff.state = 'accepted'; handoff.snapshot = null; handoff.payload = null
+  }
+}
+let _voiceTranscript = new VoiceTranscript()
+const _focusedChat = () => {
+  const get = value => value && typeof value.get === 'function' ? value.get() : value
+  return String(get(host.state.focusedSessionId) || get(host.state.activeSessionId) || '')
+}
+function _handoff(itemId, req) {
+  const owner = _voiceTranscript
+  if (!owner.sid) owner.sid = _focusedChat()
+  if (!owner.requests.has(itemId)) owner.requests.set(itemId, {owner, itemId, req, snapshot: owner.snapshot(), state: 'ready'})
+  return owner.requests.get(itemId)
+}
+const _withBackground = (req, context) => context
+  ? 'Spoken background (not a new instruction):\n' + context + '\n\nDelegated request:\n' + req : req
+async function _admit(handoff, steer = false) {
+  const owner = handoff.owner
+  const run = async () => {
+    const context = owner.context(handoff.snapshot)
+    const params = steer
+      ? {session_id: owner.sid, execution_generation: owner.generation, text: _withBackground(handoff.req, context)}
+      : (handoff.payload || {session_id: owner.sid, text: handoff.req, surface: 'voice-live',
+          submission_id: 'voice:' + owner.id + ':' + handoff.itemId, ...(context ? {voice_context: context} : {})})
+    if (!steer) handoff.payload = params
+    const receipt = await host.request(steer ? 'session.steer' : 'prompt.submit', params)
+    if (Number.isInteger(receipt?.execution_generation)) owner.generation = receipt.execution_generation
+    const accepted = steer ? ['queued', 'redirected'].includes(receipt?.status)
+      : !!receipt?.admission_id && ['queued', 'started', 'terminal'].includes(receipt.status)
+    if (accepted) owner.acknowledge(handoff)
+    return receipt
+  }
+  const result = owner.admission.then(run)
+  owner.admission = result.catch(() => {})
+  return result
+}
+
 const _isUnknownParamError = e => {
   const code = e && (e.code != null ? e.code : (e.data || {}).code)
   const msg = String((e && (e.message || e)) || '')
   return code === 4000 || /\b4000\b|extra|not permitted|unexpected|unknown (param|field|key)|surface/i.test(msg)
 }
 
-async function delegateToChat(text, onProgress) {
+async function delegateToChat(text, onProgress, handoff = null) {
   const req = String(text || '').trim()
   if (!req) return tr('Petición vacía.', 'Empty request.')
   if (_delegating && _delegating.text === req && Date.now() - _delegating.at < 30000) return tr('Esa petición ya está en curso en el chat; espera su respuesta.', 'That request is already in progress in the chat; wait for its response.')
-  const atomGet = v => { try { return v && typeof v.get === 'function' ? v.get() : v } catch { return null } }
-  const sid = String(atomGet(host.state.focusedSessionId) || atomGet(host.state.activeSessionId) || '')
+  handoff ||= _handoff("local-" + _voiceTranscript.requests.size, req)
+  const sid = handoff.owner.sid
   if (!sid) return tr('No hay una conversación abierta en la ventana. Dile al usuario que abra el chat donde quieres trabajar y que repita la petición.', 'No conversation is open in the window. Tell the user to open the chat where they want to work and repeat the request.')
   _delegating = { text: req, at: Date.now() }
   _delegSid = sid
@@ -299,7 +387,7 @@ async function delegateToChat(text, onProgress) {
     try {
       if (host && typeof host.onEvent === 'function') {
         const evSid = ev => String((ev && (ev.session_id != null ? ev.session_id : (ev.sessionId != null ? ev.sessionId : ((ev.payload || {}).session_id || (ev.payload || {}).sessionId)))) || '')
-        const same = ev => { const es = evSid(ev); return !es || es === sid }
+        const same = ev => { const es = evSid(ev); return handoff.owner === _voiceTranscript && (!es || es === sid) }
         const evText = ev => String((ev && (ev.text != null ? ev.text : (ev.display != null ? ev.display : ((ev.payload || {}).text != null ? (ev.payload || {}).text : ((ev.payload || {}).display || ''))))) || '')
         unsubs.push(host.onEvent('message.delta', ev => {
           if (!same(ev)) return
@@ -333,27 +421,29 @@ async function delegateToChat(text, onProgress) {
           errText = tr('Error del agente: ', 'Agent error: ') + String((ev && (ev.message || ev.error || (ev.payload || {}).message)) || tr('desconocido', 'unknown'))
         }))
       }
-      // Hosts con superficie voice-live agregan su propia nota de voz SOLO al input del modelo:
-      // la burbuja del usuario queda con lo que dijo. Hosts viejos rechazan el campo (params
-      // extra=forbid) y ahí caemos al prefijo de siempre.
+      // Keep the delegated request separate; incompatible hosts must not lose background.
       try {
-        const voiceContext = transcript.filter(it => (it.role === 'user' || it.role === 'bot') && it.text).slice(-12)
-          .map(it => (it.role === 'user' ? 'User: ' : 'Voice: ') + String(it.text).trim()).join('\n')
-        await host.request('prompt.submit', Object.assign({ session_id: sid, text: req, surface: 'voice-live' }, voiceContext ? { voice_context: voiceContext } : {}))
+        const receipt = await _admit(handoff)
+        if (receipt?.status === 'terminal') {
+          const saved = await host.request('prompt.receipt', {session_id: sid, admission_id: receipt.admission_id, include_result: true})
+          finalText = String(saved?.result?.final_response || '')
+          settled = true
+        }
       } catch (e) {
         if (!_isUnknownParamError(e)) throw e
-        await host.request('prompt.submit', { session_id: sid, text: _voiceNote() + req })
+        throw e // Never silently drop background on an incompatible host.
       }
     } catch (e) {
       return tr('No se pudo enviar al chat: ', 'Could not send to the chat: ') + String((e && e.message) || e || 'error')
     }
+    if (handoff.state !== 'accepted') return 'Admission is unconfirmed; context is retained. Check the chat before retrying.'
     const t0 = Date.now()
-    while (!settled && Date.now() - t0 < 3600000) await sleep(300)
+    while (!settled && handoff.owner === _voiceTranscript && Date.now() - t0 < 3600000) await sleep(300)
     if (!settled) return tr('El agente sigue trabajando en el chat; avísale al usuario que la respuesta aparecerá ahí en un momento.', 'The agent is still working in the chat; tell the user the response will appear there shortly.')
     const out = (errText || finalText || acc).trim()
     return out ? out : tr('El agente terminó sin texto visible.', 'The agent finished without visible text.')
   } finally {
-    _delegating = null
+    if (handoff.owner === _voiceTranscript) _delegating = null
     for (const u of unsubs) { try { u() } catch {} }
   }
 }
@@ -445,9 +535,7 @@ function handleDelegation(ctx, msg, dc) {
   } catch {}
   req = String(req || '').trim()
   if (!req) {
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      if (transcript[i].role === 'user' && transcript[i].text) { req = String(transcript[i].text).trim(); break }
-    }
+    req = _voiceTranscript.lastUserText.trim()
   }
   pushTranscript('tool', tr('delegación: ', 'delegation: ') + (req || '…').slice(0, 180))
   if (handoffMode === 'server') {
@@ -465,17 +553,33 @@ function handleDelegation(ctx, msg, dc) {
     _delegRespond(dc, itemId, tr('No puedo ejecutar tareas: "Trabajar en el chat" está desactivado. Pídele al usuario que lo active en la configuración del micrófono.', 'I cannot run that: "Work in the chat" is disabled. Ask the user to enable it in the mic settings.'))
     return
   }
-  if (_delegBusy && _delegSid && host && typeof host.request === 'function') {
+  const handoff = _handoff(itemId, req)
+  if (handoff.state !== 'ready' && handoff.state !== 'failed') {
+    _delegRespond(dc, itemId, 'This delegation is already accepted or pending; it has not been submitted twice.', 'commentary')
+    return
+  }
+  req = handoff.req
+  handoff.state = 'pending'
+  if (_delegBusy && _delegSid && handoff.owner.generation != null && host && typeof host.request === 'function') {
     // Mid-task speech joins the running Hermes turn (session.steer), as in Codex voice (round4).
     const steerSid = _delegSid
     ;(async () => {
       let st = ''
-      try { const r = await host.request('session.steer', { session_id: steerSid, text: req }); st = String((r && r.status) || '') } catch { st = '' }
+      try {
+        const r = await _admit(handoff, true); st = String((r && r.status) || '')
+      } catch {
+        handoff.state = 'unknown'
+        _delegRespond(dc, itemId, 'Admission is unconfirmed. Context is retained; check the chat before making a new request.', 'commentary')
+        return
+      }
+      if (handoff.owner !== _voiceTranscript) return
       if (st === 'queued' || st === 'redirected') {
         pushTranscript('tool', tr('pasado a la tarea en curso: ', 'passed to the running task: ') + req.slice(0, 100))
         _delegRespond(dc, itemId, 'Passed to the running task as a correction: "' + req + '". Hermes will take it into account. Not done yet.', 'commentary')
+      } else if (!_delegBusy) {
+        _runDelegation(ctx, dc, itemId, req, handoff)
       } else {
-        _delegQueue = { req, itemId, at: Date.now() }
+        (_delegQueue ||= []).push({ req, itemId, handoff, at: Date.now() })
         pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
         _delegRespond(dc, itemId, 'Hermes could not take that into the running task; it is queued and will run when the current task finishes. Not done yet.', 'commentary')
       }
@@ -483,32 +587,37 @@ function handleDelegation(ctx, msg, dc) {
     return
   }
   if (_delegBusy) {
-    _delegQueue = { req, itemId, at: Date.now() }
+    (_delegQueue ||= []).push({ req, itemId, handoff, at: Date.now() })
     pushTranscript('tool', tr('en cola (tarea en curso): ', 'queued (task in progress): ') + req.slice(0, 100))
     _delegRespond(dc, itemId, tr('Ya hay una tarea en curso. Dile al usuario que sigues trabajando en eso; si lo que dijo es una corrección, se verá reflejada en el resultado, y si es algo nuevo, espera a que termine lo actual.', 'A task is already in progress. Tell the user you are still on it; if what they said is a correction it will be reflected in the result, if it is something new, wait for the current one to finish.'))
     return
   }
-  _runDelegation(ctx, dc, itemId, req)
+  _runDelegation(ctx, dc, itemId, req, handoff)
 }
 
-function _runDelegation(ctx, dc, itemId, req) {
+function _runDelegation(ctx, dc, itemId, req, handoff = _handoff(itemId, req)) {
   _delegBusy = true
   ;(async () => {
     let out = ''
-    try { out = await delegateToChat(req, txt => _delegRespond(dc, itemId, _plainForVoice(txt), 'commentary')) } catch (e) { out = '' }
+    try { out = await delegateToChat(req, txt => _delegRespond(dc, itemId, _plainForVoice(txt), 'commentary'), handoff) } catch (e) { out = '' }
+    if (handoff.owner !== _voiceTranscript) return
+    if (handoff.state !== 'accepted') handoff.state = 'failed'
     out = String(out || '').trim()
     if (!out) out = tr('La tarea no pudo completarse en el chat.', 'The task could not be completed in the chat.')
     const forVoice = _plainForVoice(out)
     pushTranscript('tool', tr('resultado: ', 'result: ') + forVoice.slice(0, 160))
     _delegRespond(dc, itemId, tr('Resultado de la tarea (completa): ', 'Task complete. Result: ') + forVoice, 'speakable')
   })().catch(() => {}).then(() => {
+    if (handoff.owner !== _voiceTranscript) return
     _delegBusy = false
-    const q = _delegQueue
-    _delegQueue = null
-    if (q && Date.now() - q.at < 600000) {
-      pushTranscript('tool', tr('retomando en cola: ', 'resuming queued: ') + q.req.slice(0, 100))
-      _runDelegation(ctx, dc, q.itemId, q.req)
-    } else if (q) {
+    while (_delegQueue?.length) {
+      const q = _delegQueue.shift()
+      if (Date.now() - q.at < 600000) {
+        pushTranscript('tool', tr('retomando en cola: ', 'resuming queued: ') + q.req.slice(0, 100))
+        _runDelegation(ctx, dc, q.itemId, q.req, q.handoff)
+        break
+      }
+      q.handoff.state = 'failed' // Expiry is not admission; retain the snapshot for a retry.
       pushTranscript('sys', tr('La tarea en cola quedó obsoleta y no se ejecutó.', 'Queued task went stale and was not run.'))
       _delegRespond(dc, q.itemId, tr('La tarea en cola quedó obsoleta y no se ejecutó. Dile al usuario que si todavía la quiere, la repita y la ejecutas al tiro.', 'The queued task went stale and was not run. Tell the user that if they still want it, to say it again and you will run it right away.'))
     }
